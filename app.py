@@ -1241,6 +1241,13 @@ elif menu == "⛏️ Verus (Mining Farm)":
         unsafe_allow_html=True
     )
     st.info("📊 ดึงข้อมูลสถิติเรียลไทม์จาก LuckPool API และราคาเหรียญสดจาก CoinGecko มาคำนวณมูลค่าให้อัตโนมัติ")
+    conn = sqlite3.connect("datacenter.db")
+
+    df_test = pd.read_sql_query(
+    "SELECT COUNT(*) as total FROM vrsc_daily",conn)
+    
+    conn.close()
+
 
     verus_address = "REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
     api_url = f"https://luckpool.net/verus/miner/{verus_address}"
@@ -1282,7 +1289,8 @@ elif menu == "⛏️ Verus (Mining Farm)":
     except Exception:
         pass
     tg_token = get_setting('tg_token', '')
-    tg_chat_id = get_setting('tg_chat_id', '') 
+    tg_chat_id = get_setting('tg_chat_id', '')
+    alert_sent = get_setting('verus_low_alert', '0') 
 
     active_price_thb = cg_thb if cg_thb > 0 else 10.0
     hashrate_num = 0
@@ -1291,7 +1299,7 @@ elif menu == "⛏️ Verus (Mining Farm)":
         str(total_hashrate).replace("MH", "").replace("GH", "").strip()
     )
         
-        if hashrate_num < 420:
+        if hashrate_num < 420 and alert_sent != '1':
             r = requests.post(
                 f"https://api.telegram.org/bot{tg_token}/sendMessage",
                 json={
@@ -1300,6 +1308,11 @@ elif menu == "⛏️ Verus (Mining Farm)":
                 },
                 timeout=10
             )
+
+            save_setting("verus_low_alert", "1")
+        elif hashrate_num >= 420:
+            save_setting("verus_low_alert", "0")
+
             # st.write(r.text)
     except Exception:pass
     st.markdown("""
@@ -1344,7 +1357,8 @@ elif menu == "⛏️ Verus (Mining Farm)":
         st.markdown(f"👉 เปิดหน้าเว็บเต็มจอ: [คลิกที่นี่]({pool_web_url})", unsafe_allow_html=True)
         st.components.v1.iframe(pool_web_url, height=650, scrolling=True)
         st.markdown("---")
-    st.subheader("📈 Hashrate Analytics")
+        st.markdown("---")
+        st.subheader("📈 Hashrate Analytics")
 
     import sqlite3
     import pandas as pd
@@ -1354,6 +1368,12 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
         conn = sqlite3.connect("datacenter.db")
         cursor = conn.cursor()
+        cursor.execute("""
+        DELETE FROM hashrate_history
+        WHERE hashrate = 0
+        """)
+
+        conn.commit()
 
         conn.execute("""
         CREATE TABLE IF NOT EXISTS hashrate_history (
@@ -1404,10 +1424,30 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
         except:
             pass
+        conn = sqlite3.connect("datacenter.db")
 
+        df_test = pd.read_sql_query(
+            "SELECT COUNT(*) as total FROM vrsc_daily",
+            conn
+        )
+
+        conn = sqlite3.connect("datacenter.db")
+
+        df_test = pd.read_sql_query(
+        "SELECT COUNT(*) as total FROM vrsc_daily",
+            conn
+        )
+
+        df_vrsc = pd.read_sql_query("""
+        SELECT *
+        FROM vrsc_daily
+        ORDER BY timestamp DESC
+        LIMIT 5
+        """, conn)
+        
         df_vrsc = pd.read_sql_query(
             """
-            SELECT timestamp, paid, balance, immature
+        SELECT timestamp, paid, balance, immature            
             FROM vrsc_daily
             ORDER BY timestamp
             """,
@@ -1426,6 +1466,7 @@ elif menu == "⛏️ Verus (Mining Farm)":
             ORDER BY timestamp
             """,
             conn
+            
         )
 
         df_vrsc = pd.read_sql_query(

@@ -1250,6 +1250,20 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
     st.markdown("---")
     st.subheader("⚙️ จัดการยอดเหรียญใน Verus Mobile Wallet")
+    st.markdown("---")
+    st.subheader("📊 สรุปผลการขุดจากฐานข้อมูล")
+    st.error("TEST DATABASE")
+
+    conn = sqlite3.connect(DB_FILE)
+
+    df_vrsc = pd.read_sql_query(
+    "SELECT * FROM vrsc_daily",
+    conn
+    )
+
+    conn.close()
+
+    st.write("จำนวนข้อมูลทั้งหมด:", len(df_vrsc))
     
     wallet_balance = get_verus_wallet_balance(verus_address)
     current_wallet = wallet_balance if wallet_balance is not None else (api_paid + api_balance)
