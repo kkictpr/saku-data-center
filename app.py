@@ -1221,7 +1221,17 @@ elif menu == "📊 สินทรัพย์รวม (Asset Center)":
 
     with col1:
         st.markdown("### 💰 เงินสด")
-        st.markdown("0 บาท")
+        conn = sqlite3.connect("datacenter.db")
+        c = conn.cursor()
+
+        c.execute("SELECT balance FROM accounts WHERE account_id='cash'")
+        cash_row = c.fetchone()
+
+        conn.close()
+
+        cash_balance = cash_row[0] if cash_row else 0
+
+        st.markdown(f"{cash_balance:,.2f} บาท")
 
     with col2:
         st.markdown("### 📈 หุ้น")
@@ -1229,7 +1239,35 @@ elif menu == "📊 สินทรัพย์รวม (Asset Center)":
 
     with col3:
         st.markdown("### ⛏️ Verus")
-        st.markdown("0 บาท")
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0'}
+
+            verus_address = "REn28U7KUAbvRQTwWwjKYnKcYyiBC1ga7L"
+            api_url = f"https://luckpool.net/verus/miner/{verus_address}"
+
+            res = requests.get(api_url, headers=headers, timeout=10)
+
+            verus_value = 0
+
+            if res.status_code == 200:
+                data = res.json()
+
+                api_balance = float(data.get('balance', 0.0))
+
+                cg = requests.get(
+                "https://api.coingecko.com/api/v3/simple/price?ids=verus-coin&vs_currencies=thb",
+                timeout=10
+                )
+
+                if cg.status_code == 200:
+                    cg_data = cg.json()
+                    thb_price = float(cg_data['verus-coin']['thb'])
+                    verus_value = api_balance * thb_price
+                    st.markdown(f"{verus_value:,.2f} บาท")
+                    
+
+        except:
+            st.markdown("0 บาท")
 
 elif menu == "⛏️ Verus (Mining Farm)":
     st_autorefresh(interval=60000,key="verus_refresh")
