@@ -1494,8 +1494,53 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
         period = st.selectbox(
             "เลือกช่วงเวลา",
-            ["7 วัน", "1 เดือน", "1 ปี"]
+            ["1 วัน", "7 วัน", "1 เดือน", "1 ปี", "ทั้งหมด"]
         )
+
+        # กำหนดช่วงเวลาที่เลือกครั้งเดียว เพื่อใช้ทั้งยอดขุดและกราฟ Hashrate
+        now = datetime.now()
+
+        if period == "1 วัน":
+            start_date = now - timedelta(days=1)
+        elif period == "7 วัน":
+            start_date = now - timedelta(days=7)
+        elif period == "1 เดือน":
+            start_date = now - timedelta(days=30)
+        elif period == "1 ปี":
+            start_date = now - timedelta(days=365)
+        else:  # ทั้งหมด
+            start_date = None
+
+        # ย้ายยอดขุดมาไว้ติดกับตัวเลือกช่วงเวลา เพื่อดูคู่กับ Verus Jackpot ได้ง่าย
+        if not df_vrsc.empty:
+            df_vrsc["timestamp"] = pd.to_datetime(df_vrsc["timestamp"])
+
+            if start_date is not None:
+                df_vrsc_period = df_vrsc[
+                    df_vrsc["timestamp"] >= start_date
+                ]
+            else:
+                df_vrsc_period = df_vrsc
+
+            if not df_vrsc_period.empty:
+                first_total = (
+                    df_vrsc_period.iloc[0]["paid"]
+                    + df_vrsc_period.iloc[0]["balance"]
+                    + df_vrsc_period.iloc[0]["immature"]
+                )
+                last_total = (
+                    df_vrsc_period.iloc[-1]["paid"]
+                    + df_vrsc_period.iloc[-1]["balance"]
+                    + df_vrsc_period.iloc[-1]["immature"]
+                )
+                mined_period = last_total - first_total
+            else:
+                mined_period = 0.0
+
+            st.metric(
+                "⛏️ ขุดได้ในช่วงที่เลือก",
+                f"{mined_period:.6f} VRSC"
+            )
 
         df_hash = pd.read_sql_query(
             """
@@ -1517,25 +1562,141 @@ elif menu == "⛏️ Verus (Mining Farm)":
         )
         
         conn.close()
-       
-        if not df_vrsc.empty:
+        # ===== LUCKPOOL JACKPOT =====
+        # LuckPool Earnings API returns:
+        # timestamp:block:amount
+        #
+        # IMPORTANT:
+        # The jackpot amount is present directly in the Earnings API.
+        # We do NOT need to parse the Blocks API or touch parts[6] ("ap").
+        jackpot_url = "https://luckpool.net/verus/earnings/REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
 
-            first_total = (
-            df_vrsc.iloc[0]["paid"]
-            + df_vrsc.iloc[0]["balance"]
-            + df_vrsc.iloc[0]["immature"]
-        )
-            last_total = (
-            df_vrsc.iloc[-1]["paid"]
-            + df_vrsc.iloc[-1]["balance"]
-            + df_vrsc.iloc[-1]["immature"]
-        )
-            mined_today = last_total - first_total
+        try:
+            jackpot_response = requests.get(jackpot_url, timeout=10)
+            jackpot_response.raise_for_status()
+            jackpot_data = jackpot_response.json()
 
-            st.metric(
-                "⛏️ ขุดได้ในช่วงที่เลือก",
-                f"{mined_today:.6f} VRSC"
+            earnings_rows = []
+
+            for item in jackpot_data:
+                if not isinstance(item, str):
+                    continue
+
+                parts = item.split(":")
+                if len(parts) < 3:
+                    continue
+
+                timestamp_text = parts[0].strip()
+                block = parts[1].strip()
+                amount_text = parts[2].strip()
+
+                timestamp_num = pd.to_numeric(timestamp_text, errors="coerce")
+                amount_num = pd.to_numeric(amount_text, errors="coerce")
+
+                if (
+                    pd.isna(timestamp_num)
+                    or pd.isna(amount_num)
+                    or not block
+                    or float(amount_num) <= 0
+                ):
+                    continue
+
+                earnings_rows.append({
+                    "block": block,
+                    "amount": float(amount_num),
+                    "timestamp": float(timestamp_num)
+                })
+
+            jackpot_records = []
+
+            if earnings_rows:
+                amounts = [row["amount"] for row in earnings_rows]
+                median_amount = float(pd.Series(amounts).median())
+
+                # Normal earnings are around ~0.01 VRSC per round.
+                # LuckPool jackpot rounds appear as a very large outlier.
+                # Use both a dynamic multiplier and a conservative floor so
+                # ordinary high-earning rounds are not shown as jackpots.
+                jackpot_threshold = max(0.05, median_amount * 5.0)
+
+                for row in earnings_rows:
+                    if row["amount"] >= jackpot_threshold:
+                        jackpot_records.append(row)
+
+            # Newest block first.
+            jackpot_records.sort(
+                key=lambda x: int(x["block"]),
+                reverse=True
             )
+
+            if jackpot_records:
+                latest_jackpot = jackpot_records[0]
+                max_jackpot = max(
+                    jackpot_records,
+                    key=lambda x: x["amount"]
+                )
+                total_jackpot = sum(
+                    x["amount"] for x in jackpot_records
+                )
+
+                st.subheader("🏆 Verus Jackpot")
+
+                col1, col2, col3 = st.columns(3)
+
+                with col1:
+                    st.metric(
+                        "🏆 จำนวนครั้ง",
+                        f"{len(jackpot_records)} ครั้ง"
+                    )
+
+                with col2:
+                    st.metric(
+                        "💰 Jackpot ล่าสุด",
+                        f"{latest_jackpot['amount']:.8f} VRSC"
+                    )
+
+                with col3:
+                    st.metric(
+                        "📈 Jackpot สูงสุด",
+                        f"{max_jackpot['amount']:.8f} VRSC"
+                    )
+
+                col4, col5, col6 = st.columns(3)
+
+                with col4:
+                    st.metric(
+                        "🔢 Block ล่าสุด",
+                        latest_jackpot["block"]
+                    )
+
+                with col5:
+                    st.metric(
+                        "💰 Jackpot สะสม",
+                        f"{total_jackpot:.8f} VRSC"
+                    )
+
+                latest_date = pd.to_datetime(
+                    latest_jackpot["timestamp"],
+                    unit="ms",
+                    utc=True,
+                    errors="coerce"
+                )
+
+                if not pd.isna(latest_date):
+                    st.caption(
+                        f"📅 Jackpot ล่าสุด: "
+                        f"{latest_date.strftime('%Y-%m-%d %H:%M:%S UTC')}"
+                    )
+
+                st.caption(
+                    f"ตรวจจาก LuckPool Earnings API | "
+                    f"เกณฑ์ Jackpot รอบนี้ ≥ {jackpot_threshold:.8f} VRSC"
+                )
+            else:
+                st.info("ยังไม่พบ Jackpot ในข้อมูล Earnings ของ LuckPool")
+
+        except Exception as e:
+            st.error(f"Jackpot API Error: {e}")
 
         if not df_hash.empty:
 
@@ -1543,20 +1704,10 @@ elif menu == "⛏️ Verus (Mining Farm)":
                 df_hash["timestamp"]
             )
 
-            now = datetime.now()
-
-            if period == "7 วัน":
-                start_date = now - timedelta(days=7)
-
-            elif period == "1 เดือน":
-                start_date = now - timedelta(days=30)
-
-            else:
-                start_date = now - timedelta(days=365)
-
-            df_hash = df_hash[
-                df_hash["timestamp"] >= start_date
-            ]
+            if start_date is not None:
+                df_hash = df_hash[
+                    df_hash["timestamp"] >= start_date
+                ]
 
             c1, c2, c3 = st.columns(3)
 
@@ -1581,9 +1732,10 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
         else:
             st.info("ยังไม่มีข้อมูล Hashrate")
+            
 
     except Exception as e:
-        st.error(f"Hashrate Analytics Error : {e}")
+            st.error(f"Hashrate Analytics Error : {e}")
 elif menu == "🍦 ร้านไอศกรีม (Ice Cream)":
     if st.button("⬅️ กลับหน้าแรก (Portal Hub)"):
         st.session_state['nav_menu'] = "หน้าแรก (Portal Hub)"
