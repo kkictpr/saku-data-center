@@ -306,6 +306,10 @@ selected_menu = st.sidebar.radio("เลือกเมนูหลัก:", men
 st.session_state['nav_menu'] = selected_menu
 menu = st.session_state['nav_menu']
 
+# Refresh เฉพาะหน้าปัจจุบัน โดยคงเมนู/หน้าที่กำลังเปิดไว้
+if st.sidebar.button("🔄 Refresh หน้านี้", key="refresh_current_page", use_container_width=True):
+    st.rerun()
+
 acc_options = {
     'cash': '💵 เงินสดในมือ (Cash)',
     'kbank_1': 'กสิกรไทย 1 (บัญชีรวม)',
