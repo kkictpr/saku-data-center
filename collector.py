@@ -9,6 +9,8 @@ from supabase import create_client
 
 load_dotenv()
 
+GITHUB_ACTIONS = os.getenv("GITHUB_ACTIONS") == "true"
+
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
@@ -347,5 +349,8 @@ while True:
             datetime.now().strftime("%H:%M:%S"),
             "No Jackpot records found"
         )
+    if GITHUB_ACTIONS:
+        print("GitHub Actions: one-shot mode complete.")
+        break
 
     time.sleep(300)
