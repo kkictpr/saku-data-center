@@ -5,7 +5,6 @@ from streamlit_autorefresh import st_autorefresh
 import sqlite3
 import pandas as pd
 from datetime import datetime
-from zoneinfo import ZoneInfo
 import requests
 import time
 import threading
@@ -1603,11 +1602,21 @@ elif menu == "⛏️ Verus (Mining Farm)":
             jackpot_records = []
             for x in records:
                 try:
-                    jackpot_records.append({
-                        "block": int(x.get("height") or x.get("block")),
-                        "amount": float(x.get("reward") or x.get("amount") or 0),
-                        "timestamp": int(x.get("timestamp") or x.get("time") or 0)
-                    })
+                    if isinstance(x, str):
+                        p=x.split(":")
+                        if len(p) < 9:
+                            continue
+                        jackpot_records.append({
+                            "block": int(p[2]),
+                            "amount": float(p[8])/100000000,
+                            "timestamp": int(p[4])/1000
+                        })
+                    elif isinstance(x, dict):
+                        jackpot_records.append({
+                            "block": int(x.get("height") or x.get("block")),
+                            "amount": float(x.get("reward") or x.get("amount") or 0),
+                            "timestamp": int(x.get("timestamp") or x.get("time") or 0)
+                        })
                 except Exception:
                     pass
 
@@ -1617,10 +1626,10 @@ elif menu == "⛏️ Verus (Mining Farm)":
             total_amount = sum(x["amount"] for x in jackpot_records)
             highest = max([x["amount"] for x in jackpot_records], default=0)
 
-            today = datetime.now(ZoneInfo("Asia/Bangkok")).date()
+            today = datetime.now().date()
             today_records = [
                 x for x in jackpot_records
-                if datetime.fromtimestamp(x["timestamp"], ZoneInfo("Asia/Bangkok")).date() == today
+                if datetime.fromtimestamp(x["timestamp"]).date() == today
             ]
 
             st.subheader("🏆 Verus Jackpot")
@@ -1633,7 +1642,7 @@ elif menu == "⛏️ Verus (Mining Farm)":
             c4,c5,c6 = st.columns(3)
             c4.metric("🔢 Block ล่าสุด", latest["block"] if latest else "-")
             c5.metric("💰 Jackpot สะสม", f"{total_amount:.8f} VRSC")
-            c6.metric("⏰ เวลาล่าสุด", datetime.fromtimestamp(latest["timestamp"], ZoneInfo("Asia/Bangkok")).strftime("%d/%m/%Y %H:%M") if latest else "-")
+            c6.metric("⏰ เวลาล่าสุด", datetime.fromtimestamp(latest["timestamp"]).strftime("%d/%m/%Y %H:%M") if latest and latest.get("timestamp") else "-")
 
             st.markdown("---")
 
