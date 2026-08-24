@@ -1581,42 +1581,59 @@ elif menu == "⛏️ Verus (Mining Farm)":
         st.metric("⛏️ ขุดได้ในช่วงที่เลือก", f"{mined_today:.8f} VRSC")
 
         # ===== LUCKPOOL JACKPOT =====
-        # LuckPool Earnings API returns:
-        # timestamp:block:amount
-        #
-        # IMPORTANT:
-        # The jackpot amount is present directly in the Earnings API.
-        # We do NOT need to parse the Blocks API or touch parts[6] ("ap").
         jackpot_url = "https://luckpool.net/verus/earnings/REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
 
         try:
-            jackpot_response = requests.get(jackpot_url, timeout=10)
+            jackpot_response = requests.get(
+                jackpot_url,
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=15
+            )
             jackpot_response.raise_for_status()
             jackpot_data = jackpot_response.json()
 
             earnings_rows = []
 
+            # รองรับทั้ง List และ Dict (LuckPool มีการเปลี่ยนรูปแบบ API ได้)
+            if isinstance(jackpot_data, dict):
+                if "earnings" in jackpot_data:
+                    jackpot_data = jackpot_data["earnings"]
+                elif "data" in jackpot_data:
+                    jackpot_data = jackpot_data["data"]
+                else:
+                    jackpot_data = [jackpot_data]
+
             for item in jackpot_data:
-                if not isinstance(item, str):
-                    continue
 
-                parts = item.split(":")
-                if len(parts) < 3:
-                    continue
+                # รูปแบบเดิม: "timestamp:block:amount"
+                if isinstance(item, str):
+                    parts = item.split(":")
+                    if len(parts) < 3:
+                        continue
 
-                timestamp_text = parts[0].strip()
-                block = parts[1].strip()
-                amount_text = parts[2].strip()
+                    timestamp_text = parts[0].strip()
+                    block = parts[1].strip()
+                    amount_text = parts[2].strip()
+
+                # รูปแบบใหม่: Object
+                elif isinstance(item, dict):
+                    timestamp_text = item.get("timestamp") or item.get("time") or item.get("created") or item.get("created_at")
+                    block = str(item.get("block") or item.get("height") or "-")
+
+                    amount_text = (
+                        item.get("amount")
+                        or item.get("reward")
+                        or item.get("value")
+                        or item.get("vrsc")
+                    )
+
+                else:
+                    continue
 
                 timestamp_num = pd.to_numeric(timestamp_text, errors="coerce")
                 amount_num = pd.to_numeric(amount_text, errors="coerce")
 
-                if (
-                    pd.isna(timestamp_num)
-                    or pd.isna(amount_num)
-                    or not block
-                    or float(amount_num) <= 0
-                ):
+                if pd.isna(timestamp_num) or pd.isna(amount_num):
                     continue
 
                 earnings_rows.append({
@@ -1628,22 +1645,16 @@ elif menu == "⛏️ Verus (Mining Farm)":
             jackpot_records = []
 
             if earnings_rows:
-                amounts = [row["amount"] for row in earnings_rows]
+                amounts = [r["amount"] for r in earnings_rows]
                 median_amount = float(pd.Series(amounts).median())
+                jackpot_threshold = max(0.05, median_amount * 5)
 
-                # Normal earnings are around ~0.01 VRSC per round.
-                # LuckPool jackpot rounds appear as a very large outlier.
-                # Use both a dynamic multiplier and a conservative floor so
-                # ordinary high-earning rounds are not shown as jackpots.
-                jackpot_threshold = max(0.05, median_amount * 5.0)
+                for r in earnings_rows:
+                    if r["amount"] >= jackpot_threshold:
+                        jackpot_records.append(r)
 
-                for row in earnings_rows:
-                    if row["amount"] >= jackpot_threshold:
-                        jackpot_records.append(row)
-
-            # Newest block first.
             jackpot_records.sort(
-                key=lambda x: int(x["block"]),
+                key=lambda x: int(x["block"]) if str(x["block"]).isdigit() else -1,
                 reverse=True
             )
 
@@ -1711,11 +1722,10 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
             if not today_records:
                 st.info("วันนี้ยังไม่มี Jackpot จาก LuckPool")
-                
-        except Exception as e:
-            st.error(f"Jackpot API Error: {e}")
 
-        
+        except Exception as e:
+            st.error(f"Jackpot API Error: {type(e).__name__}: {e}")
+
 
         if not df_hash.empty:
 
