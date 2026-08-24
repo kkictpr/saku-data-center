@@ -10,6 +10,14 @@ import time
 import threading
 import base64
 from supabase import create_client
+ASSETS = os.path.join(os.path.dirname(__file__), "assets")
+
+def img_to_b64(path):
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+solar_panel_b64 = img_to_b64(os.path.join(ASSETS, "solar_panel.png"))
+house_b64 = img_to_b64(os.path.join(ASSETS, "house.png"))
 
 load_dotenv()
 
@@ -20,6 +28,8 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.set_page_config(page_title="Saku Data Center", layout="wide", initial_sidebar_state="expanded")
 
+
+st_autorefresh(interval=60_000, key="solar_refresh")
 def init_db():
     try:
         conn = sqlite3.connect('datacenter.db', timeout=15)
@@ -1403,12 +1413,15 @@ elif menu == "⛏️ Verus (Mining Farm)":
     col_res3.metric("💰 มูลค่ารวมในกระเป๋า (THB)", f"{total_market_thb:,.2f} บาท")
 
     pool_web_url = f"https://luckpool.net/verus/miner.html?{verus_address}"
-    with st.expander("🖥️ เปิดดูหน้าเว็บสถิติ LuckPool เต็มรูปแบบ (Embedded)"):
-        st.markdown(f"👉 เปิดหน้าเว็บเต็มจอ: [คลิกที่นี่]({pool_web_url})", unsafe_allow_html=True)
-        st.components.v1.iframe(pool_web_url, height=650, scrolling=True)
-        st.markdown("---")
-        st.markdown("---")
-        st.subheader("📈 Hashrate Analytics")
+
+    st.link_button(
+        "🌐 เปิดหน้าเว็บสถิติ LuckPool (เว็บทางการ)",
+        pool_web_url,
+        use_container_width=True
+    )
+
+    st.markdown("---")
+    st.subheader("📈 Hashrate Analytics")
 
     import sqlite3
     import pandas as pd
@@ -1506,74 +1519,18 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
         period = st.selectbox(
             "เลือกช่วงเวลา",
-            ["1 วัน", "3 วัน", "7 วัน", "15 วัน", "1 เดือน", "1 ปี", "ทั้งหมด"]
+            ["วันนี้", "3 วัน", "7 วัน", "15 วัน", "1 เดือน", "1 ปี", "ทั้งหมด"]
         )
 
-        # กำหนดช่วงเวลาที่เลือกครั้งเดียว เพื่อใช้ทั้งยอดขุดและกราฟ Hashrate
-        now = datetime.now()
-
-        if period == "1 วัน":
-            start_date = now - timedelta(days=1)
-        elif period == "3 วัน":
-            start_date = now - timedelta(days=3)
-        elif period == "7 วัน":
-            start_date = now - timedelta(days=7)
-        elif period == "15 วัน":
-            start_date = now - timedelta(days=15)
-        elif period == "1 เดือน":
-            start_date = now - timedelta(days=30)
-        elif period == "1 ปี":
-            start_date = now - timedelta(days=365)
-        else:  # ทั้งหมด
-            start_date = None
-
-        # ย้ายยอดขุดมาไว้ติดกับตัวเลือกช่วงเวลา เพื่อดูคู่กับ Verus Jackpot ได้ง่าย
-        if not df_vrsc.empty:
-            df_vrsc["timestamp"] = pd.to_datetime(df_vrsc["timestamp"])
-
-            if start_date is not None:
-                df_vrsc_period = df_vrsc[
-                    df_vrsc["timestamp"] >= start_date
-                ]
-            else:
-                df_vrsc_period = df_vrsc
-
-            if not df_vrsc_period.empty:
-                first_total = (
-                    df_vrsc_period.iloc[0]["paid"]
-                    + df_vrsc_period.iloc[0]["balance"]
-                    + df_vrsc_period.iloc[0]["immature"]
-                )
-                last_total = (
-                    df_vrsc_period.iloc[-1]["paid"]
-                    + df_vrsc_period.iloc[-1]["balance"]
-                    + df_vrsc_period.iloc[-1]["immature"]
-                )
-                mined_period = last_total - first_total
-            else:
-                mined_period = 0.0
-
-            st.metric(
-                "⛏️ ขุดได้ในช่วงที่เลือก",
-                f"{mined_period:.6f} VRSC"
-            )
-
-            hash_rows = (
-                supabase
-                .table("hashrate_history")
-                .select("timestamp, hashrate")
-                .order("timestamp")
-                .execute()
-                .data
-            )
-
-            df_hash = pd.DataFrame(hash_rows)
-
-            if not df_hash.empty:
-                df_hash["timestamp"] = pd.to_datetime(
-                    df_hash["timestamp"],
-                    utc=True
-                ).dt.tz_convert("Asia/Bangkok").dt.tz_localize(None)
+        df_hash = pd.read_sql_query(
+            """
+            SELECT timestamp, hashrate
+            FROM hashrate_history
+            ORDER BY timestamp
+            """,
+            conn
+            
+        )
 
         df_vrsc = pd.read_sql_query(
             """
@@ -1584,162 +1541,529 @@ elif menu == "⛏️ Verus (Mining Farm)":
             conn
         )
         
-        conn.close()
-        # ===== VERUS JACKPOT HISTORY =====
-        # Jackpot is no longer read from LuckPool here.
-        # Collector.py records new Jackpot events into Supabase jackpot_history.
-        # Dashboard reads our own stored history, so the report remains available
-        # even when the LuckPool Earnings API later returns an empty list.
+        # คำนวณจาก LuckPool earnings/address (V15)
+        earnings_url = "https://luckpool.net/verus/earnings/REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
+        mined_today = 0.0
 
         try:
-            jackpot_rows = (
-                supabase
-                .table("jackpot_history")
-                .select("block, amount, timestamp")
-                .order("timestamp", desc=True)
-                .execute()
-                .data
+            er = requests.get(earnings_url, timeout=10)
+            er.raise_for_status()
+            earnings = er.json()
+            now = pd.Timestamp.now()
+
+            days_map = {
+                "วันนี้": 1,
+                "3 วัน": 3,
+                "7 วัน": 7,
+                "10 วัน": 10,
+                "15 วัน": 15,
+                "1 เดือน": 30,
+                "1 ปี": 365,
+            }
+
+            days = days_map.get(period)
+
+            for item in earnings:
+                parts = item.split(":")
+                if len(parts) != 3:
+                    continue
+
+                ts = pd.to_datetime(int(parts[0]), unit="ms")
+                amount = float(parts[2])
+
+                if days is None or ts >= now - pd.Timedelta(days=days):
+                    mined_today += amount
+
+        except Exception:
+            mined_today = 0.0
+
+        conn.close()
+        st.metric("⛏️ ขุดได้ในช่วงที่เลือก", f"{mined_today:.8f} VRSC")
+
+        # ===== LUCKPOOL JACKPOT =====
+        # LuckPool Earnings API returns:
+        # timestamp:block:amount
+        #
+        # IMPORTANT:
+        # The jackpot amount is present directly in the Earnings API.
+        # We do NOT need to parse the Blocks API or touch parts[6] ("ap").
+        jackpot_url = "https://luckpool.net/verus/earnings/REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
+
+        try:
+            jackpot_response = requests.get(jackpot_url, timeout=10)
+            jackpot_response.raise_for_status()
+            jackpot_data = jackpot_response.json()
+
+            earnings_rows = []
+
+            for item in jackpot_data:
+                if not isinstance(item, str):
+                    continue
+
+                parts = item.split(":")
+                if len(parts) < 3:
+                    continue
+
+                timestamp_text = parts[0].strip()
+                block = parts[1].strip()
+                amount_text = parts[2].strip()
+
+                timestamp_num = pd.to_numeric(timestamp_text, errors="coerce")
+                amount_num = pd.to_numeric(amount_text, errors="coerce")
+
+                if (
+                    pd.isna(timestamp_num)
+                    or pd.isna(amount_num)
+                    or not block
+                    or float(amount_num) <= 0
+                ):
+                    continue
+
+                earnings_rows.append({
+                    "block": block,
+                    "amount": float(amount_num),
+                    "timestamp": float(timestamp_num)
+                })
+
+            jackpot_records = []
+
+            if earnings_rows:
+                amounts = [row["amount"] for row in earnings_rows]
+                median_amount = float(pd.Series(amounts).median())
+
+                # Normal earnings are around ~0.01 VRSC per round.
+                # LuckPool jackpot rounds appear as a very large outlier.
+                # Use both a dynamic multiplier and a conservative floor so
+                # ordinary high-earning rounds are not shown as jackpots.
+                jackpot_threshold = max(0.05, median_amount * 5.0)
+
+                for row in earnings_rows:
+                    if row["amount"] >= jackpot_threshold:
+                        jackpot_records.append(row)
+
+            # Newest block first.
+            jackpot_records.sort(
+                key=lambda x: int(x["block"]),
+                reverse=True
             )
 
-            df_jackpot = pd.DataFrame(jackpot_rows)
+            latest_jackpot = jackpot_records[0] if jackpot_records else None
+            max_jackpot = max(jackpot_records, key=lambda x: x["amount"]) if jackpot_records else None
+            total_jackpot = sum(x["amount"] for x in jackpot_records)
 
-            if not df_jackpot.empty:
-                df_jackpot["timestamp"] = pd.to_datetime(
-                    df_jackpot["timestamp"],
-                    utc=True,
-                    errors="coerce"
-                )
+            latest_time = "-"
+            latest_block = "-"
 
-                df_jackpot["dt"] = (
-                    df_jackpot["timestamp"]
-                    .dt.tz_convert("Asia/Bangkok")
-                    .dt.tz_localize(None)
-                )
+            if latest_jackpot:
+                latest_time = datetime.fromtimestamp(
+                    latest_jackpot["timestamp"]
+                ).strftime("%d/%m/%Y %H:%M")
+                latest_block = latest_jackpot["block"]
 
-                df_jackpot["amount"] = pd.to_numeric(
-                    df_jackpot["amount"],
-                    errors="coerce"
-                )
-
-                df_jackpot = df_jackpot.dropna(
-                    subset=["timestamp", "amount", "block"]
-                )
-
-                # Use exactly the same period selector as mined coins.
-                if start_date is not None:
-                    df_jackpot = df_jackpot[
-                        df_jackpot["dt"] >= start_date
-                    ]
-
-                df_jackpot = df_jackpot.sort_values(
-                    "timestamp",
-                    ascending=False
-                )
+            today = datetime.now().date()
+            today_records = [
+                x for x in jackpot_records
+                if datetime.fromtimestamp(x["timestamp"]).date() == today
+            ]
 
             st.subheader("🏆 Verus Jackpot")
 
-            if not df_jackpot.empty:
-                latest_jackpot = df_jackpot.iloc[0]
-                max_jackpot = df_jackpot.loc[
-                    df_jackpot["amount"].idxmax()
-                ]
-                total_jackpot = float(df_jackpot["amount"].sum())
+            col1, col2, col3 = st.columns(3)
 
-                col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("🏆 จำนวนครั้ง", f"{len(jackpot_records)} ครั้ง")
 
-                with col1:
-                    st.metric(
-                        "🏆 จำนวนครั้ง",
-                        f"{len(df_jackpot)} ครั้ง"
-                    )
-
-                with col2:
-                    st.metric(
-                        "💰 Jackpot ล่าสุด",
-                        f"{latest_jackpot['amount']:.8f} VRSC"
-                    )
-
-                with col3:
-                    st.metric(
-                        "📈 Jackpot สูงสุด",
-                        f"{max_jackpot['amount']:.8f} VRSC"
-                    )
-
-                col4, col5, col6 = st.columns(3)
-
-                with col4:
-                    st.metric(
-                        "🔢 Block ล่าสุด",
-                        str(int(latest_jackpot["block"]))
-                    )
-
-                with col5:
-                    st.metric(
-                        "💰 Jackpot สะสม",
-                        f"{total_jackpot:.8f} VRSC"
-                    )
-
-                with col6:
-                    latest_dt = latest_jackpot["dt"]
-                    st.metric(
-                        "🕒 เวลา Jackpot ล่าสุด",
-                        latest_dt.strftime("%d/%m/%Y %H:%M")
-                    )
-
-            else:
-                st.info(
-                    "ยังไม่มี Jackpot ที่ Collector บันทึกไว้ในช่วงเวลานี้"
+            with col2:
+                st.metric(
+                    "💰 Jackpot ล่าสุด",
+                    f"{latest_jackpot['amount']:.8f} VRSC" if latest_jackpot else "0.00000000 VRSC"
                 )
 
+            with col3:
+                st.metric(
+                    "📈 Jackpot สูงสุด",
+                    f"{max_jackpot['amount']:.8f} VRSC" if max_jackpot else "0.00000000 VRSC"
+                )
+
+            col4, col5, col6 = st.columns(3)
+
+            with col4:
+                st.metric("🔢 Block ล่าสุด", latest_block)
+
+            with col5:
+                st.metric("💰 Jackpot สะสม", f"{total_jackpot:.8f} VRSC")
+
+            with col6:
+                st.metric("⏰ เวลาล่าสุด", latest_time)
+
+            st.markdown("---")
+
+            c7, c8 = st.columns(2)
+
+            with c7:
+                st.metric("🎯 Jackpot วันนี้", f"{len(today_records)} Block")
+
+            with c8:
+                st.metric(
+                    "💰 VRSC วันนี้",
+                    f"{sum(x['amount'] for x in today_records):.6f} VRSC"
+                )
+
+            if not today_records:
+                st.info("วันนี้ยังไม่มี Jackpot จาก LuckPool")
+                
         except Exception as e:
-            st.subheader("🏆 Verus Jackpot")
-            st.error(f"Jackpot History Error: {e}")
+            st.error(f"Jackpot API Error: {e}")
+
+        
 
         if not df_hash.empty:
 
-            # Supabase timestamp เป็น UTC (+00:00)
-            # แปลงเป็นเวลาไทยก่อนเทียบกับ start_date ที่สร้างจาก datetime.now()
             df_hash["timestamp"] = pd.to_datetime(
-                df_hash["timestamp"],
-                utc=True
-            ).dt.tz_convert("Asia/Bangkok").dt.tz_localize(None)
+                df_hash["timestamp"]
+            )
+
+            now = datetime.now()
+
+            if period == "วันนี้":
+                start_date = now - timedelta(days=1)
+
+            elif period == "3 วัน":
+                start_date = now - timedelta(days=3)
+
+            elif period == "7 วัน":
+                start_date = now - timedelta(days=7)
+
+            elif period == "15 วัน":
+                start_date = now - timedelta(days=15)
+
+            elif period == "1 เดือน":
+                start_date = now - timedelta(days=30)
+
+            elif period == "1 ปี":
+                start_date = now - timedelta(days=365)
+
+            else:
+                start_date = None
 
             if start_date is not None:
                 df_hash = df_hash[
-                    df_hash["timestamp"] >= start_date
-                ]
+                df_hash["timestamp"] >= start_date
+            ]
 
-            # ถ้าข้อมูลไม่อยู่ในช่วงเวลาที่เลือก จะไม่แสดง nan
-            if not df_hash.empty:
-                c1, c2, c3 = st.columns(3)
+            c1, c2, c3 = st.columns(3)
 
-                c1.metric(
-                    "📊 Average",
-                    f"{df_hash['hashrate'].mean():.2f} MH"
-                )
+            c1.metric(
+                "📊 ค่าเฉลี่ย",
+                f"{df_hash['hashrate'].mean():.2f} MH"
+            )
 
-                c2.metric(
-                    "⬆️ Max",
-                    f"{df_hash['hashrate'].max():.2f} MH"
-                )
+            c2.metric(
+                "⬆️ ค่าสูงสุด",
+                f"{df_hash['hashrate'].max():.2f} MH"
+            )
 
-                c3.metric(
-                    "⬇️ Min",
-                    f"{df_hash['hashrate'].min():.2f} MH"
-                )
+            c3.metric(
+                "⬇️ ค่าต่ำสุด",
+                f"{df_hash['hashrate'].min():.2f} MH"
+            )
 
-                st.line_chart(
-                    df_hash.set_index("timestamp")["hashrate"]
-                )
+            st.line_chart(
+                df_hash.set_index("timestamp")["hashrate"]
+            )
+
+            st.markdown("---")
+            
+            st.subheader("💸 Payment History")
+            import sqlite3
+            conn = sqlite3.connect("datacenter.db")
+            cur = conn.cursor()
+            cur.execute("""CREATE TABLE IF NOT EXISTS payments_history(
+                txid TEXT PRIMARY KEY,
+                amount REAL,
+                paid_at TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )""")
+            rows = cur.execute("SELECT txid, amount, paid_at FROM payments_history ORDER BY paid_at DESC LIMIT 20").fetchall()
+            total = cur.execute("SELECT COALESCE(SUM(amount),0), COUNT(*) FROM payments_history").fetchone()
+            latest_payment = rows[0][1] if rows else 0.0
+            latest = rows[0][1] if rows else 0
+            c1,c2,c3=st.columns(3)
+            c1.metric("💰 ยอดรับล่าสุด", f"{latest_payment:.6f} VRSC")
+            c2.metric("💎 ยอดสะสม", f"{total[0]:.6f} VRSC")
+            c3.metric("🔢 จำนวนครั้ง", int(total[1]))
+            if rows:
+                st.dataframe([{"เวลา":r[2],"VRSC":r[1],"TXID":r[0]} for r in rows], use_container_width=True)
             else:
-                st.info("ยังไม่มีข้อมูล Hashrate ในช่วงเวลาที่เลือก")
+                st.info("ยังไม่มีข้อมูลการจ่ายจาก LuckPool ในฐานข้อมูล")
+            st.markdown("---")
+            st.subheader("🖥️ Worker Details")
+
+            try:
+                from luckpool_api import miner as miner_api
+                w = miner_api("REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L")
+
+                # LuckPool miner API ส่ง workers เป็นสตริงรูปแบบ:
+                # noname:416281611.54:29068.053:on:ap:false:1:18.475
+                worker_display="noname"
+                hashrate="0 MH"
+                shares=0
+                status="🔴 Offline"
+
+                workers=w.get("workers", [])
+                if workers:
+                    raw=workers[0]
+                    if isinstance(raw, str):
+                        p=raw.split(":")
+                        worker_display=p[0]
+                        sol=float(p[1]) if len(p)>1 else 0
+                        shares=float(p[2]) if len(p)>2 else 0
+                        state=p[3] if len(p)>3 else "off"
+                        hashrate=f"{sol/1_000_000:.2f} MH"
+                        status="🟢 Online" if state=="on" else "🔴 Offline"
+                    elif isinstance(raw, dict):
+                        worker_display=raw.get("name","noname")
+                        hashrate=raw.get("hashrateString","0 MH")
+                        shares=raw.get("shares",0)
+                        status="🟢 Online" if float(raw.get("hashrateSol",0) or 0)>0 else "🔴 Offline"
+
+                w1,w2,w3,w4 = st.columns(4)
+                w1.metric("สถานะ", status)
+                w2.metric("Worker", worker_display)
+                w3.metric("Hashrate", hashrate)
+                w4.metric("Shares", shares)
+
+            except Exception as e:
+                w1,w2,w3,w4 = st.columns(4)
+                w1.metric("สถานะ","ยังไม่เชื่อม")
+                w2.metric("Worker","noname")
+                w3.metric("Hashrate","0 MH")
+                w4.metric("Shares","0")
+                st.info("รอข้อมูลจาก LuckPool OpenAPI : worker/address.worker")
+
+            st.markdown("---")
+            st.subheader("🌐 Network / Pool Stats")
+
+            try:
+                from luckpool_api import stats as pool_stats
+
+                s = pool_stats()
+
+                # LuckPool /stats ส่งค่าแบบ Flat JSON
+                n1,n2,n3,n4 = st.columns(4)
+                n1.metric("Difficulty", f"{float(s.get('networkDiff',0)):,.0f}")
+                n2.metric("Network Hashrate", s.get("networkRate","-"))
+                n3.metric("Block Height", f"{int(s.get('networkHeight',0)):,}")
+                n4.metric("Pool Miners", f"{int(s.get('poolMiners',0)):,}")
+
+                p1,p2,p3 = st.columns(3)
+                p1.metric("Pool Hashrate", s.get("poolRate","-"))
+                p2.metric("Workers", f"{int(s.get('poolWorkers',0)):,}")
+                p3.metric("LuckPool Fee", "1%")
+
+            except Exception as e:
+                st.info("รอข้อมูลจาก LuckPool OpenAPI : stats/network")
+
+
+
 
         else:
             st.info("ยังไม่มีข้อมูล Hashrate")
-            
 
     except Exception as e:
-            st.error(f"Hashrate Analytics Error : {e}")
+        st.error(f"Hashrate Analytics Error : {e}")
+elif menu == "☀️ Solar (Solar System)":
+    # st_autorefresh moved to top of file (avoid duplicate key)
+
+    if st.button("⬅️ กลับหน้าแรก (Portal Hub)", key="back_home_solar"):
+        st.session_state['nav_menu'] = "หน้าแรก (Portal Hub)"
+        st.rerun()
+
+    st.markdown("<h2>☀️ ระบบโซลาร์เซลล์ (Solar System)</h2>", unsafe_allow_html=True)
+    st.info("📡 ข้อมูลจาก SOLARMAN Collector")
+
+    conn = sqlite3.connect("datacenter.db")
+
+    df_solar = pd.read_sql_query("""
+    SELECT *
+    FROM solar_realtime
+    ORDER BY timestamp DESC
+    LIMIT 1
+    """, conn)
+
+    conn.close()
+
+
+    if not df_solar.empty:
+        r = df_solar.iloc[0]
+
+        # ===== LIVE SOLARMAN =====
+        try:
+            import solar_api
+            live = solar_api.real_time()
+            station = solar_api.station_detail()["stationList"][0]
+
+            pv_power = float(live.get("generationPower") or 0) / 1000
+            load_power = float(live.get("usePower") or 0) / 1000
+            grid_power = (float(live.get("gridPower")) / 1000) if live.get("gridPower") is not None else None
+            today_energy = float(live.get("generationToday") or 0)
+            total_energy = float(live.get("generationTotal") or 0)
+            station_name = station.get("name","โอ้เธอ หวานเจี๊ยบ")
+            timestamp = live.get("lastUpdateTime")
+        except Exception:
+            pv_power = float(r.get("pv_power") or 0) / 1000
+            load_power = float(r.get("load_power") or 0) / 1000
+            grid_raw = r.get("grid_power")
+            grid_power = None if grid_raw is None else float(grid_raw) / 1000
+            today_energy = float(r.get("today_energy") or 0)
+            total_energy = float(r.get("total_energy") or 0)
+            station_name = r.get("station_name") or "โอ้เธอ หวานเจี๊ยบ"
+            timestamp = r.get("timestamp")
+
+        # ใช้ค่า gridPower ถ้ามีจริง ถ้าไม่มีให้คำนวณจากสมดุลพลังงาน
+        if grid_power is not None and abs(grid_power) > 0.01:
+            purchase_kw = max(0, -grid_power)
+            sell_kw = max(0, grid_power)
+        else:
+            purchase_kw = max(0, load_power - pv_power)
+            sell_kw = max(0, pv_power - load_power)
+        if purchase_kw < 0.1:
+            color = "#16a34a"; status = "🟢 แสงแดดเพียงพอ"
+        elif purchase_kw < 0.5:
+            color = "#ca8a04"; status = "🟡 เริ่มซื้อไฟ"
+        else:
+            color = "#dc2626"; status = "🔴 ซื้อไฟสูง"
+
+        st.markdown(f"""
+        <div style="background:{color};padding:22px;border-radius:16px;margin-bottom:18px;">
+          <div style="font-size:18px;color:white;font-weight:bold;">⚡ ซื้อไฟจากการไฟฟ้า (KPI หลัก)</div>
+          <div style="font-size:54px;font-weight:bold;color:white;">{purchase_kw*1000:.0f} W</div>
+          <div style="color:white;font-size:16px;">{status}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        c1,c2,c3=st.columns(3)
+        c1.metric("☀️ กำลังผลิต (PV)",f"{pv_power:.2f} kW")
+        c2.metric("🏠 ใช้ไฟในบ้าน",f"{load_power:.2f} kW")
+        c3.metric("📤 ส่งเข้ากริด",f"{sell_kw:.2f} kW")
+
+        st.markdown("---")
+        st.subheader("🔄 แผนผังพลังงานแบบเรียลไทม์ (Power Flow)")
+        flow_html=f"""
+<style>
+.panel{{background:linear-gradient(180deg,#07111f,#020814);border:1px solid #1f3b5a;border-radius:22px;padding:22px}}
+.glow{{filter:drop-shadow(0 0 8px #38bdf8)}}
+.pv{{stroke:#38bdf8;stroke-width:7;fill:none;stroke-linecap:round;stroke-dasharray:12 18;animation:pv 1s linear infinite}}
+.grid{{stroke:#22c55e;stroke-width:7;fill:none;stroke-linecap:round;stroke-dasharray:12 18;animation:grid 1s linear infinite}}
+.load{{stroke:#60a5fa;stroke-width:7;fill:none;stroke-linecap:round;stroke-dasharray:12 18;animation:pv 1s linear infinite}}
+@keyframes pv{{from{{stroke-dashoffset:30}}to{{stroke-dashoffset:0}}}}
+@keyframes grid{{from{{stroke-dashoffset:-30}}to{{stroke-dashoffset:0}}}}
+</style>
+<div class="panel">
+<svg viewBox="0 0 760 460" width="100%" xmlns="http://www.w3.org/2000/svg">
+<path stroke="#365f8f" stroke-width="7" fill="none" d="M110 185 H320"/>
+<path stroke="#365f8f" stroke-width="7" fill="none" d="M430 185 H650"/>
+<path stroke="#365f8f" stroke-width="7" fill="none" d="M375 185 V340"/>
+<path class="pv glow" d="M110 185 H320"/>
+<path class="{'grid glow' if sell_kw>0 else 'pv glow'}" d="M430 185 H650"/>
+<path class="load glow" d="M375 185 V340"/>
+<circle cx="110" cy="185" r="8" fill="#60a5fa"/><circle cx="320" cy="185" r="8" fill="#60a5fa"/><circle cx="430" cy="185" r="8" fill="#60a5fa"/><circle cx="650" cy="185" r="8" fill="#60a5fa"/><circle cx="375" cy="265" r="8" fill="#60a5fa"/>
+<image href="data:image/png;base64,{solar_panel_b64}"
+       x="25"
+       y="45"
+       width="95"
+       height="95"/>
+
+<text x="135" y="95" class="title">กำลังผลิต</text>
+<text x="135" y="125" class="value-blue">{pv_power:.2f} kW</text>
+<text x="135" y="145" font-size="14" fill="#9ecbff">จากแผงโซลาร์เซลล์</text>
+<circle cx="375" cy="185" r="8" fill="#60a5fa"/>
+
+<image href="data:image/png;base64,{house_b64}"
+       x="270"
+       y="70"
+       width="220"
+       height="190"/>
+
+<text x="350" y="255" class="title">ใช้ไฟในบ้าน</text>
+<text x="350" y="280" class="value-yellow">{load_power:.2f} kW</text>
+</svg>
+<div style="display:flex;justify-content:space-between;margin-top:12px;color:#cbd5e1">
+<span>🔵 พลังงานจากโซลาร์</span><span>{'🟢 ส่งเข้ากริด' if sell_kw>0 else '🔴 ซื้อไฟจากกริด' if purchase_kw>0 else '🟢 สมดุลพลังงาน'}</span>
+</div></div>"""
+        st.markdown(flow_html, unsafe_allow_html=True)
+
+        col_left, col_right = st.columns([1, 1])
+
+        with col_left:
+            st.markdown("""
+            <div style="
+                background:#081524;
+                border:1px solid #16395d;
+                border-radius:16px;
+                padding:16px;
+                min-height:150px;">
+                <h4 style="color:white;">📋 คำอธิบาย</h4>
+                <div style="color:#38bdf8;">🔵 โซลาร์ → บ้าน</div>
+                <div style="color:#60a5fa;">🔹 ใช้ไฟภายในบ้าน</div>
+                <div style="color:#22c55e;">🟢 ส่งเข้ากริด</div>
+                <div style="color:#facc15;">🟡 ซื้อไฟจากกริด</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col_right:
+            status_text = "แสงแดดเพียงพอ" if purchase_kw < 0.1 else "เริ่มซื้อไฟ"
+            status_color = "#22c55e" if purchase_kw < 0.1 else "#f59e0b"
+
+            st.markdown(f"""
+            <div style="
+                background:#081524;
+                border:1px solid #16395d;
+                border-radius:16px;
+                padding:18px;
+                min-height:180px;
+                box-shadow:0 0 15px rgba(0,120,255,.08);">
+
+            <div style="font-size:18px;font-weight:bold;color:white;">
+                📊 สถานะปัจจุบัน
+            </div>
+
+            <div style="
+                margin-top:18px;
+                font-size:28px;
+                font-weight:bold;
+                color:{status_color};">
+                {status_text}
+            </div>
+
+            <hr style="border-color:#16395d;margin:18px 0;">
+
+            <div style="color:#9ecbff;font-size:15px;">
+                ซื้อไฟจากการไฟฟ้า
+            </div>
+            <div style="font-size:22px;font-weight:bold;color:white;">
+                {purchase_kw*1000:.0f} W
+            </div>
+
+            <div style="margin-top:10px;color:#9ecbff;font-size:15px;">
+                พลังงานเหลือเข้าระบบ
+            </div>
+            <div style="font-size:22px;font-weight:bold;color:#22c55e;">
+                {sell_kw:.2f} kW
+            </div>
+
+        """, unsafe_allow_html=True)
+        
+        ts = (
+            datetime.fromtimestamp(int(timestamp)).strftime("%d/%m/%Y %H:%M:%S")
+            if timestamp else "-"
+        )
+        st.caption(f"อัปเดตล่าสุด {ts}")
+
+    else:
+        st.warning("ยังไม่มีข้อมูลจาก Solar Collector")
+
+
 elif menu == "🍦 ร้านไอศกรีม (Ice Cream)":
     if st.button("⬅️ กลับหน้าแรก (Portal Hub)"):
         st.session_state['nav_menu'] = "หน้าแรก (Portal Hub)"
