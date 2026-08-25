@@ -1632,36 +1632,21 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
             st.subheader("🏆 Verus Jackpot")
 
-            now = datetime.now()
-            period_map = {"วันนี้":0,"3 วัน":3,"7 วัน":7,"15 วัน":15,"1 เดือน":30,"1 ปี":365}
-
-            if period == "ทั้งหมด":
-                filtered = sorted(jackpot_records, key=lambda x: x["timestamp"], reverse=True)
-            else:
-                start_dt = datetime(now.year, now.month, now.day) - timedelta(days=period_map[period])
-                filtered = sorted([x for x in jackpot_records if x["timestamp"] >= start_dt.timestamp()], key=lambda x: x["timestamp"], reverse=True)
-
-            latest = filtered[0] if filtered else None
-            today_records = [x for x in filtered if datetime.fromtimestamp(x["timestamp"]).date()==now.date()]
-
-            JACKPOT_REWARD = 0.1
-            count = len(filtered)
-
             c1,c2,c3 = st.columns(3)
-            c1.metric("🏆 จำนวนครั้ง", f"{count} ครั้ง")
-            c2.metric("💰 Jackpot ล่าสุด", f"{JACKPOT_REWARD if count else 0:.8f} VRSC")
-            c3.metric("📈 Jackpot สูงสุด", f"{JACKPOT_REWARD if count else 0:.8f} VRSC")
+            c1.metric("🏆 จำนวนครั้ง", f"{len(jackpot_records)} ครั้ง")
+            c2.metric("💰 Jackpot ล่าสุด", f"{latest['amount']:.8f} VRSC" if latest else "0.00000000 VRSC")
+            c3.metric("📈 Jackpot สูงสุด", f"{highest:.8f} VRSC")
 
             c4,c5,c6 = st.columns(3)
             c4.metric("🔢 Block ล่าสุด", latest["block"] if latest else "-")
-            c5.metric("💰 Jackpot สะสม", f"{count*JACKPOT_REWARD:.8f} VRSC")
+            c5.metric("💰 Jackpot สะสม", f"{total_amount:.8f} VRSC")
             c6.metric("⏰ เวลาล่าสุด", datetime.fromtimestamp(latest["timestamp"]).strftime("%d/%m/%Y %H:%M") if latest else "-")
 
             st.markdown("---")
 
             c7,c8 = st.columns(2)
             c7.metric("🎯 Jackpot วันนี้", f"{len(today_records)} Block")
-            c8.metric("💰 VRSC วันนี้", f"{len(today_records)*JACKPOT_REWARD:.6f} VRSC")
+            c8.metric("💰 VRSC วันนี้", f"{sum(x['amount'] for x in today_records):.6f} VRSC")
 
         except Exception as e:
             st.error(f"Jackpot API Error: {e}")
