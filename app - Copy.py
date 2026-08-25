@@ -24,7 +24,9 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SECRET_KEY")
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Supabase is optional for the local dashboard.  Do not prevent the app from
+# starting when a local .env has not been configured yet.
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
 st.set_page_config(page_title="Saku Data Center", layout="wide", initial_sidebar_state="expanded")
 
@@ -125,6 +127,31 @@ def init_db():
         c.execute('''CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT
+        )''')
+
+        # These are read by the Verus dashboard before any collector may have
+        # run. Creating them here keeps a new database usable on its first run.
+        c.execute('''CREATE TABLE IF NOT EXISTS hashrate_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            hashrate REAL
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS vrsc_daily (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            paid REAL,
+            balance REAL,
+            immature REAL
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS solar_realtime (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp INTEGER,
+            pv_power REAL,
+            load_power REAL,
+            grid_power REAL,
+            today_energy REAL,
+            total_energy REAL,
+            station_name TEXT
         )''')
         
         conn.commit()
@@ -1286,8 +1313,7 @@ elif menu == "📊 สินทรัพย์รวม (Asset Center)":
                     cg_data = cg.json()
                     thb_price = float(cg_data['verus-coin']['thb'])
                     verus_value = api_balance * thb_price
-                    st.markdown(f"{verus_value:,.2f} บาท")
-                    
+            st.markdown(f"{verus_value:,.2f} บาท")
 
         except:
             st.markdown("0 บาท")
@@ -1302,14 +1328,6 @@ elif menu == "⛏️ Verus (Mining Farm)":
         unsafe_allow_html=True
     )
     st.info("📊 ดึงข้อมูลสถิติเรียลไทม์จาก LuckPool API และราคาเหรียญสดจาก CoinGecko มาคำนวณมูลค่าให้อัตโนมัติ")
-    conn = sqlite3.connect("datacenter.db")
-
-    df_test = pd.read_sql_query(
-    "SELECT COUNT(*) as total FROM vrsc_daily",conn)
-    
-    conn.close()
-
-
     verus_address = "REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
     api_url = f"https://luckpool.net/verus/miner/{verus_address}"
 
@@ -1360,7 +1378,7 @@ elif menu == "⛏️ Verus (Mining Farm)":
         str(total_hashrate).replace("MH", "").replace("GH", "").strip()
     )
         
-        if hashrate_num < 420 and alert_sent != '1':
+        if tg_token and tg_chat_id and hashrate_num < 420 and alert_sent != '1':
             r = requests.post(
                 f"https://api.telegram.org/bot{tg_token}/sendMessage",
                 json={
@@ -1487,19 +1505,8 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
         except:
             pass
-        conn = sqlite3.connect("datacenter.db")
-
-        df_test = pd.read_sql_query(
-            "SELECT COUNT(*) as total FROM vrsc_daily",
-            conn
-        )
-
-        conn = sqlite3.connect("datacenter.db")
-
-        df_test = pd.read_sql_query(
-        "SELECT COUNT(*) as total FROM vrsc_daily",
-            conn
-        )
+        # Reuse the same connection created above; opening a second one here
+        # leaked database handles on every automatic refresh.
 
         df_vrsc = pd.read_sql_query("""
         SELECT *
@@ -1827,16 +1834,17 @@ elif menu == "☀️ Solar (Solar System)":
     st.markdown("<h2>☀️ ระบบโซลาร์เซลล์ (Solar System)</h2>", unsafe_allow_html=True)
     st.info("📡 ข้อมูลจาก SOLARMAN Collector")
 
-    conn = sqlite3.connect("datacenter.db")
-
-    df_solar = pd.read_sql_query("""
-    SELECT *
-    FROM solar_realtime
-    ORDER BY timestamp DESC
-    LIMIT 1
-    """, conn)
-
-    conn.close()
+    try:
+        conn = sqlite3.connect("datacenter.db", timeout=15)
+        df_solar = pd.read_sql_query("""
+        SELECT *
+        FROM solar_realtime
+        ORDER BY timestamp DESC
+        LIMIT 1
+        """, conn)
+        conn.close()
+    except Exception:
+        df_solar = pd.DataFrame()
 
 
     if not df_solar.empty:
@@ -1996,13 +2004,13 @@ elif menu == "☀️ Solar (Solar System)":
             <div style="font-size:22px;font-weight:bold;color:#22c55e;">
                 {sell_kw:.2f} kW
             </div>
-
+            </div>
         """, unsafe_allow_html=True)
         
-        ts = (
-            datetime.fromtimestamp(int(timestamp)).strftime("%d/%m/%Y %H:%M:%S")
-            if timestamp else "-"
-        )
+        try:
+            ts = datetime.fromtimestamp(int(timestamp)).strftime("%d/%m/%Y %H:%M:%S") if timestamp else "-"
+        except (TypeError, ValueError, OSError):
+            ts = str(timestamp) if timestamp else "-"
         st.caption(f"อัปเดตล่าสุด {ts}")
 
     else:
