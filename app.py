@@ -1620,38 +1620,23 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
             jackpot_records.sort(key=lambda z: z["timestamp"], reverse=True)
 
-            now = datetime.now()
-            period_days = {
-                "วันนี้": 0,
-                "3 วัน": 3,
-                "7 วัน": 7,
-                "15 วัน": 15,
-                "1 เดือน": 30,
-                "1 ปี": 365,
-            }
+            now_th = datetime.now()
+            start_today = datetime(now_th.year, now_th.month, now_th.day)
+            period_days = {"วันนี้":0,"3 วัน":3,"7 วัน":7,"15 วัน":15,"1 เดือน":30,"1 ปี":365}
 
             if period == "ทั้งหมด":
                 filtered = jackpot_records
             elif period == "วันนี้":
-                filtered = [
-                    x for x in jackpot_records
-                    if datetime.fromtimestamp(x["timestamp"]).date() == now.date()
-                ]
+                filtered=[x for x in jackpot_records if datetime.fromtimestamp(x["timestamp"]).date()==now_th.date()]
             else:
-                cutoff = datetime(now.year, now.month, now.day) - timedelta(days=period_days[period]-1)
-                filtered = [
-                    x for x in jackpot_records
-                    if datetime.fromtimestamp(x["timestamp"]) >= cutoff
-                ]
+                start = start_today - timedelta(days=period_days[period]-1)
+                filtered=[x for x in jackpot_records if datetime.fromtimestamp(x["timestamp"])>=start]
 
             latest = filtered[0] if filtered else None
             total_amount = sum(x["amount"] for x in filtered)
             highest = max([x["amount"] for x in filtered], default=0)
 
-            today_records = [
-                x for x in filtered
-                if datetime.fromtimestamp(x["timestamp"]).date() == now.date()
-            ]
+            today_records = [x for x in filtered if datetime.fromtimestamp(x["timestamp"]).date()==now_th.date()]
 
             st.subheader("🏆 Verus Jackpot")
 
