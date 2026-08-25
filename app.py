@@ -1608,7 +1608,7 @@ elif menu == "⛏️ Verus (Mining Farm)":
                             continue
                         jackpot_records.append({
                             "block": int(p[2]),
-                            "amount": float(p[8])/100000000,
+                            "amount": 0.0,
                             "timestamp": int(p[4])/1000
                         })
                     elif isinstance(x, dict):
@@ -1620,43 +1620,64 @@ elif menu == "⛏️ Verus (Mining Farm)":
                 except Exception:
                     pass
 
+
+            # ใช้ earnings/address เป็นแหล่ง VRSC จริง
+            try:
+                er = requests.get(earnings_url, timeout=10)
+                er.raise_for_status()
+                earn = []
+                now = pd.Timestamp.now()
+                days_map = {"วันนี้":1,"3 วัน":3,"7 วัน":7,"10 วัน":10,"15 วัน":15,"1 เดือน":30,"1 ปี":365}
+                days = days_map.get(period)
+                for row in er.json():
+                    p = row.split(":")
+                    if len(p)==3:
+                        ts = pd.to_datetime(int(p[0]), unit="ms")
+                        if days is None or ts >= now - pd.Timedelta(days=days):
+                            earn.append({"ts": ts, "amount": float(p[2])})
+                latest_amount = highest_amount = total_amount = 0.0
+                jackpot_count = 0
+            except Exception:
+                latest_amount = highest_amount = total_amount = 0.0
+                jackpot_count = 0
             jackpot_records.sort(key=lambda z: z["timestamp"], reverse=True)
 
             now = datetime.now()
             if period == "วันนี้":
-                filtered = [x for x in jackpot_records if datetime.fromtimestamp(x["timestamp"]).date() == now.date()]
+                filtered = [x for x in jackpot_records if datetime.fromtimestamp(x["timestamp"]).date()==now.date()]
             elif period == "3 วัน":
-                filtered = [x for x in jackpot_records if x["timestamp"] >= (now - timedelta(days=3)).timestamp()]
+                filtered = [x for x in jackpot_records if x["timestamp"] >= (now-timedelta(days=3)).timestamp()]
             elif period == "7 วัน":
-                filtered = [x for x in jackpot_records if x["timestamp"] >= (now - timedelta(days=7)).timestamp()]
+                filtered = [x for x in jackpot_records if x["timestamp"] >= (now-timedelta(days=7)).timestamp()]
             elif period == "15 วัน":
-                filtered = [x for x in jackpot_records if x["timestamp"] >= (now - timedelta(days=15)).timestamp()]
+                filtered = [x for x in jackpot_records if x["timestamp"] >= (now-timedelta(days=15)).timestamp()]
             elif period == "1 เดือน":
-                filtered = [x for x in jackpot_records if x["timestamp"] >= (now - timedelta(days=30)).timestamp()]
+                filtered = [x for x in jackpot_records if x["timestamp"] >= (now-timedelta(days=30)).timestamp()]
             elif period == "1 ปี":
-                filtered = [x for x in jackpot_records if x["timestamp"] >= (now - timedelta(days=365)).timestamp()]
+                filtered = [x for x in jackpot_records if x["timestamp"] >= (now-timedelta(days=365)).timestamp()]
             else:
                 filtered = jackpot_records
 
             latest = filtered[0] if filtered else None
+            today_records = [x for x in filtered if datetime.fromtimestamp(x["timestamp"]).date()==now.date()]
 
             st.subheader("🏆 Verus Jackpot")
 
             c1,c2,c3 = st.columns(3)
             c1.metric("🏆 จำนวนครั้ง", f"{len(filtered)} ครั้ง")
-            c2.metric("💰 Jackpot ล่าสุด", "0.00000000 VRSC")
-            c3.metric("📈 Jackpot สูงสุด", "0.00000000 VRSC")
+            c2.metric("💰 Jackpot ล่าสุด", f"{latest_amount:.8f} VRSC")
+            c3.metric("📈 Jackpot สูงสุด", f"{highest_amount:.8f} VRSC")
 
             c4,c5,c6 = st.columns(3)
-            c4.metric("🔢 Block ล่าสุด", latest["block"] if latest else 0)
-            c5.metric("💰 Jackpot สะสม", "0.00000000 VRSC")
-            c6.metric("⏰ เวลาล่าสุด", datetime.fromtimestamp(latest["timestamp"]).strftime("%d/%m/%Y %H:%M") if latest else "-")
+            c4.metric("🔢 Block ล่าสุด", latest["block"] if latest else "-")
+            c5.metric("💰 Jackpot สะสม", f"{total_amount:.8f} VRSC")
+            c6.metric("⏰ เวลาล่าสุด", datetime.fromtimestamp(latest["timestamp"]).strftime("%d/%m/%Y %H:%M") if latest and latest.get("timestamp") else "-")
 
             st.markdown("---")
 
             c7,c8 = st.columns(2)
-            c7.metric("🎯 Jackpot วันนี้", f"{len([x for x in filtered if datetime.fromtimestamp(x['timestamp']).date()==now.date()])} Block")
-            c8.metric("💰 VRSC วันนี้", "0.000000 VRSC")
+            c7.metric("🎯 Jackpot วันนี้", f"{len(today_records)} Block")
+            c8.metric("💰 VRSC วันนี้", f"{sum(x['amount'] for x in today_records):.6f} VRSC")
 
         except Exception as e:
             st.error(f"Jackpot API Error: {e}")
