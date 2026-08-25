@@ -1585,8 +1585,6 @@ elif menu == "⛏️ Verus (Mining Farm)":
             mined_today = 0.0
 
         conn.close()
-        st.metric("⛏️ ขุดได้ในช่วงที่เลือก", f"{mined_today:.8f} VRSC")
-
         # ===== LUCKPOOL JACKPOT =====
         wallet = "REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
 
@@ -1646,6 +1644,16 @@ elif menu == "⛏️ Verus (Mining Farm)":
             total_amount = sum(x["amount"] for x in filtered)
             highest = max([x["amount"] for x in filtered], default=0)
 
+            # earnings/address and blocks/address are separate LuckPool feeds.
+            # Show their combined value as the true mining income for the
+            # selected period, while retaining both components for auditability.
+            total_mined = mined_today + total_amount
+            st.metric("⛏️ ขุดได้รวมในช่วงที่เลือก", f"{total_mined:.8f} VRSC")
+            st.caption(
+                f"รายได้ Pool: {mined_today:.8f} VRSC + "
+                f"Jackpot: {total_amount:.8f} VRSC"
+            )
+
             today_records = [x for x in filtered if datetime.fromtimestamp(x["timestamp"]).date()==now_th.date()]
 
             st.subheader("🏆 Verus Jackpot")
@@ -1667,6 +1675,8 @@ elif menu == "⛏️ Verus (Mining Farm)":
             c8.metric("💰 VRSC วันนี้", f"{sum(x['amount'] for x in today_records):.6f} VRSC")
 
         except Exception as e:
+            st.metric("⛏️ รายได้ Pool ในช่วงที่เลือก", f"{mined_today:.8f} VRSC")
+            st.caption("ยังดึงข้อมูล Jackpot ไม่ได้ จึงยังไม่รวมรางวัล Block ในยอดนี้")
             st.error(f"Jackpot API Error: {e}")
 
         if not df_hash.empty:

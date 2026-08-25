@@ -225,73 +225,6 @@ def get_verus_wallet_balance(address):
         print(e)
 
     return None
-
-
-def hashrate_to_mh(value):
-    """Convert LuckPool's display value (or raw Sol/s) to MH/s."""
-    try:
-        text = str(value).strip().upper().replace(",", "")
-        for unit, multiplier in (("GH", 1000), ("MH", 1), ("KH", 0.001), ("H", 0.000001)):
-            if text.endswith(unit):
-                return float(text[:-len(unit)].strip()) * multiplier
-        raw = float(text)
-        return raw / 1_000_000 if abs(raw) >= 1_000_000 else raw
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def luckpool_timestamp(value):
-    """Accept Unix seconds, Unix milliseconds, and ISO timestamps."""
-    try:
-        numeric = float(value)
-        if numeric > 100_000_000_000:
-            numeric /= 1000
-        return datetime.fromtimestamp(numeric)
-    except (TypeError, ValueError, OSError):
-        return pd.to_datetime(value, errors="coerce")
-
-
-def luckpool_history_rows(payload):
-    """Normalize miner/history responses from the documented LuckPool API."""
-    if isinstance(payload, dict):
-        payload = payload.get("history") or payload.get("data") or payload.get("hashrate") or []
-    rows = []
-    for item in payload if isinstance(payload, list) else []:
-        try:
-            if isinstance(item, str):
-                parts = item.split(":")
-                when, rate = parts[0], parts[1]
-            else:
-                when = item.get("timestamp", item.get("time", item.get("date")))
-                rate = item.get("hashrate", item.get("hashrateSol", item.get("rate", 0)))
-            when = luckpool_timestamp(when)
-            if pd.notna(when):
-                rows.append({"timestamp": when, "hashrate": hashrate_to_mh(rate)})
-        except (AttributeError, IndexError, TypeError, ValueError):
-            continue
-    return rows
-
-
-def luckpool_payment_rows(payload):
-    """Normalize payments/address into rows suitable for the dashboard."""
-    if isinstance(payload, dict):
-        payload = payload.get("payments") or payload.get("data") or []
-    rows = []
-    for item in payload if isinstance(payload, list) else []:
-        try:
-            if isinstance(item, str):
-                parts = item.split(":")
-                txid, amount, paid_at = parts[0], parts[1], parts[2]
-            else:
-                txid = item.get("txid", item.get("transaction", item.get("id", "-")))
-                amount = item.get("amount", item.get("value", 0))
-                paid_at = item.get("timestamp", item.get("time", item.get("paidAt")))
-            when = luckpool_timestamp(paid_at)
-            rows.append({"เวลา": when.strftime("%d/%m/%Y %H:%M") if pd.notna(when) else "-",
-                         "VRSC": float(amount), "TXID": str(txid)})
-        except (AttributeError, IndexError, TypeError, ValueError):
-            continue
-    return rows
 def send_telegram_auto(token, chat_id, freq_name=""):
     try:
         conn = sqlite3.connect('datacenter.db', timeout=15)
@@ -1439,8 +1372,12 @@ elif menu == "⛏️ Verus (Mining Farm)":
     alert_sent = get_setting('verus_low_alert', '0') 
 
     active_price_thb = cg_thb if cg_thb > 0 else 10.0
-    hashrate_num = hashrate_to_mh(total_hashrate)
+    hashrate_num = 0
     try:
+        hashrate_num = float(
+        str(total_hashrate).replace("MH", "").replace("GH", "").strip()
+    )
+        
         if tg_token and tg_chat_id and hashrate_num < 420 and alert_sent != '1':
             r = requests.post(
                 f"https://api.telegram.org/bot{tg_token}/sendMessage",
@@ -1592,19 +1529,15 @@ elif menu == "⛏️ Verus (Mining Farm)":
             ["วันนี้", "3 วัน", "7 วัน", "15 วัน", "1 เดือน", "1 ปี", "ทั้งหมด"]
         )
 
-        # Use the pool's documented Miner API for historical hashrate.  The
-        # local collector remains a fallback when LuckPool is unavailable.
-        try:
-            history_response = requests.get(
-                f"https://luckpool.net/verus/miner/history/{verus_address}",
-                headers={"User-Agent": "Mozilla/5.0"}, timeout=15
-            )
-            history_response.raise_for_status()
-            df_hash = pd.DataFrame(luckpool_history_rows(history_response.json()))
-        except Exception:
-            df_hash = pd.read_sql_query(
-                "SELECT timestamp, hashrate FROM hashrate_history ORDER BY timestamp", conn
-            )
+        df_hash = pd.read_sql_query(
+            """
+            SELECT timestamp, hashrate
+            FROM hashrate_history
+            ORDER BY timestamp
+            """,
+            conn
+            
+        )
 
         df_vrsc = pd.read_sql_query(
             """
@@ -1673,21 +1606,36 @@ elif menu == "⛏️ Verus (Mining Farm)":
             else:
                 records = []
 
+            def vrsc_from_api_amount(value):
+                """Return a LuckPool amount as VRSC, accepting sats or VRSC."""
+                amount = float(value)
+                return amount / 100_000_000 if abs(amount) >= 1_000_000 else amount
+
             jackpot_records = []
             for x in records:
                 try:
                     if isinstance(x, str):
-                        p=x.split(":")
+                        p = x.split(":")
+                        if len(p) < 9:
+                            continue
                         jackpot_records.append({
                             "block": int(p[2]),
-                            "amount": float(p[8])/100000000,
-                            "timestamp": int(p[4])/1000
+                            # Field 8 is the exact reward reported by
+                            # LuckPool for this block, in satoshis.
+                            "reward": vrsc_from_api_amount(p[8]),
+                            "timestamp": int(p[4]) / 1000,
                         })
                     elif isinstance(x, dict):
+                        reward = vrsc_from_api_amount(
+                            x.get("reward") or x.get("amount") or 0
+                        )
+                        timestamp = float(x.get("timestamp") or x.get("time") or 0)
+                        if timestamp > 100_000_000_000:
+                            timestamp /= 1000
                         jackpot_records.append({
                             "block": int(x.get("height") or x.get("block")),
-                            "amount": float(x.get("reward") or x.get("amount") or 0),
-                            "timestamp": int(x.get("timestamp") or x.get("time") or 0)
+                            "reward": reward,
+                            "timestamp": timestamp,
                         })
                 except Exception:
                     pass
@@ -1710,28 +1658,39 @@ elif menu == "⛏️ Verus (Mining Farm)":
                 ]
 
             latest = filtered[0] if filtered else None
-            total_amount = sum(x["amount"] for x in filtered)
-            highest = max([x["amount"] for x in filtered], default=0)
+            total_jackpot = sum(x["reward"] for x in filtered)
+            highest_jackpot = max(
+                (x["reward"] for x in filtered), default=0
+            )
 
-            today_records = [x for x in filtered if datetime.fromtimestamp(x["timestamp"]).date()==now_th.date()]
+            # "วันนี้" should always mean the calendar day today, independent
+            # of the range selected above.
+            today_records = [
+                x for x in jackpot_records
+                if datetime.fromtimestamp(x["timestamp"]).date() == now_th.date()
+            ]
+            today_jackpot = sum(x["reward"] for x in today_records)
 
             st.subheader("🏆 Verus Jackpot")
+            st.caption(
+                "แสดงยอดรางวัลจริงราย Block จาก LuckPool API โดยคงทศนิยม 8 ตำแหน่ง"
+            )
 
             c1,c2,c3 = st.columns(3)
-            c1.metric("🏆 จำนวนครั้ง", f"{len(filtered)} ครั้ง")
-            c2.metric("💰 Jackpot ล่าสุด", f"{latest['amount']:.8f} VRSC" if latest else "0.00000000 VRSC")
-            c3.metric("📈 Jackpot สูงสุด", f"{highest:.8f} VRSC")
+            c1.metric("🏆 จำนวนครั้งในช่วงที่เลือก", f"{len(filtered)} ครั้ง")
+            c2.metric("💰 Jackpot ล่าสุด", f"{latest['reward']:.8f} VRSC" if latest else "0.00000000 VRSC")
+            c3.metric("📈 Jackpot สูงสุดในช่วงที่เลือก", f"{highest_jackpot:.8f} VRSC")
 
             c4,c5,c6 = st.columns(3)
             c4.metric("🔢 Block ล่าสุด", latest["block"] if latest else "-")
-            c5.metric("💰 Jackpot สะสม", f"{total_amount:.8f} VRSC")
+            c5.metric("💰 Jackpot สะสมในช่วงที่เลือก", f"{total_jackpot:.8f} VRSC")
             c6.metric("⏰ เวลาล่าสุด", datetime.fromtimestamp(latest["timestamp"]).strftime("%d/%m/%Y %H:%M") if latest else "-")
 
             st.markdown("---")
 
             c7,c8 = st.columns(2)
             c7.metric("🎯 Jackpot วันนี้", f"{len(today_records)} Block")
-            c8.metric("💰 VRSC วันนี้", f"{sum(x['amount'] for x in today_records):.6f} VRSC")
+            c8.metric("💰 Jackpot วันนี้", f"{today_jackpot:.8f} VRSC")
 
         except Exception as e:
             st.error(f"Jackpot API Error: {e}")
@@ -1803,26 +1762,16 @@ elif menu == "⛏️ Verus (Mining Farm)":
                 paid_at TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )""")
-            try:
-                payment_response = requests.get(
-                    f"https://luckpool.net/verus/payments/{verus_address}",
-                    headers={"User-Agent": "Mozilla/5.0"}, timeout=15
-                )
-                payment_response.raise_for_status()
-                payment_rows = luckpool_payment_rows(payment_response.json())
-            except Exception:
-                local_rows = cur.execute(
-                    "SELECT txid, amount, paid_at FROM payments_history ORDER BY paid_at DESC LIMIT 20"
-                ).fetchall()
-                payment_rows = [{"เวลา": row[2], "VRSC": row[1], "TXID": row[0]} for row in local_rows]
-            latest_payment = payment_rows[0]["VRSC"] if payment_rows else 0.0
-            total_paid = sum(row["VRSC"] for row in payment_rows)
+            rows = cur.execute("SELECT txid, amount, paid_at FROM payments_history ORDER BY paid_at DESC LIMIT 20").fetchall()
+            total = cur.execute("SELECT COALESCE(SUM(amount),0), COUNT(*) FROM payments_history").fetchone()
+            latest_payment = rows[0][1] if rows else 0.0
+            latest = rows[0][1] if rows else 0
             c1,c2,c3=st.columns(3)
             c1.metric("💰 ยอดรับล่าสุด", f"{latest_payment:.6f} VRSC")
-            c2.metric("💎 ยอดสะสม", f"{total_paid:.6f} VRSC")
-            c3.metric("🔢 จำนวนครั้ง", len(payment_rows))
-            if payment_rows:
-                st.dataframe(payment_rows, use_container_width=True, hide_index=True)
+            c2.metric("💎 ยอดสะสม", f"{total[0]:.6f} VRSC")
+            c3.metric("🔢 จำนวนครั้ง", int(total[1]))
+            if rows:
+                st.dataframe([{"เวลา":r[2],"VRSC":r[1],"TXID":r[0]} for r in rows], use_container_width=True)
             else:
                 st.info("ยังไม่มีข้อมูลการจ่ายจาก LuckPool ในฐานข้อมูล")
             st.markdown("---")
