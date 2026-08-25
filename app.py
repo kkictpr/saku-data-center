@@ -1620,20 +1620,43 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
             jackpot_records.sort(key=lambda z: z["timestamp"], reverse=True)
 
-            latest = jackpot_records[0] if jackpot_records else None
-            total_amount = sum(x["amount"] for x in jackpot_records)
-            highest = max([x["amount"] for x in jackpot_records], default=0)
+            now = datetime.now()
+            period_days = {
+                "วันนี้": 0,
+                "3 วัน": 3,
+                "7 วัน": 7,
+                "15 วัน": 15,
+                "1 เดือน": 30,
+                "1 ปี": 365,
+            }
 
-            today = datetime.now().date()
+            if period == "ทั้งหมด":
+                filtered = jackpot_records
+            elif period == "วันนี้":
+                filtered = [
+                    x for x in jackpot_records
+                    if datetime.fromtimestamp(x["timestamp"]).date() == now.date()
+                ]
+            else:
+                cutoff = datetime(now.year, now.month, now.day) - timedelta(days=period_days[period]-1)
+                filtered = [
+                    x for x in jackpot_records
+                    if datetime.fromtimestamp(x["timestamp"]) >= cutoff
+                ]
+
+            latest = filtered[0] if filtered else None
+            total_amount = sum(x["amount"] for x in filtered)
+            highest = max([x["amount"] for x in filtered], default=0)
+
             today_records = [
-                x for x in jackpot_records
-                if datetime.fromtimestamp(x["timestamp"]).date() == today
+                x for x in filtered
+                if datetime.fromtimestamp(x["timestamp"]).date() == now.date()
             ]
 
             st.subheader("🏆 Verus Jackpot")
 
             c1,c2,c3 = st.columns(3)
-            c1.metric("🏆 จำนวนครั้ง", f"{len(jackpot_records)} ครั้ง")
+            c1.metric("🏆 จำนวนครั้ง", f"{len(filtered)} ครั้ง")
             c2.metric("💰 Jackpot ล่าสุด", f"{latest['amount']:.8f} VRSC" if latest else "0.00000000 VRSC")
             c3.metric("📈 Jackpot สูงสุด", f"{highest:.8f} VRSC")
 
