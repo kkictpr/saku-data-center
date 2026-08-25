@@ -4,7 +4,7 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import sqlite3
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 import time
 import threading
@@ -1425,7 +1425,7 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
     import sqlite3
     import pandas as pd
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timedelta
 
     try:
 
@@ -1643,20 +1643,28 @@ elif menu == "⛏️ Verus (Mining Farm)":
             jackpot_records.sort(key=lambda z: z["timestamp"], reverse=True)
 
             now = datetime.now()
+
+            # ใช้ขอบเขตเป็น "วันปฏิทิน" ของไทย ไม่ใช่ย้อนหลัง 72 ชั่วโมง
             if period == "วันนี้":
-                filtered = [x for x in jackpot_records if datetime.fromtimestamp(x["timestamp"]).date()==now.date()]
+                start_dt = datetime(now.year, now.month, now.day)
             elif period == "3 วัน":
-                filtered = [x for x in jackpot_records if x["timestamp"] >= (now-timedelta(days=3)).timestamp()]
+                start_dt = datetime(now.year, now.month, now.day) - timedelta(days=3)
             elif period == "7 วัน":
-                filtered = [x for x in jackpot_records if x["timestamp"] >= (now-timedelta(days=7)).timestamp()]
+                start_dt = datetime(now.year, now.month, now.day) - timedelta(days=7)
             elif period == "15 วัน":
-                filtered = [x for x in jackpot_records if x["timestamp"] >= (now-timedelta(days=15)).timestamp()]
+                start_dt = datetime(now.year, now.month, now.day) - timedelta(days=15)
             elif period == "1 เดือน":
-                filtered = [x for x in jackpot_records if x["timestamp"] >= (now-timedelta(days=30)).timestamp()]
+                start_dt = datetime(now.year, now.month, now.day) - timedelta(days=30)
             elif period == "1 ปี":
-                filtered = [x for x in jackpot_records if x["timestamp"] >= (now-timedelta(days=365)).timestamp()]
+                start_dt = datetime(now.year, now.month, now.day) - timedelta(days=365)
             else:
+                start_dt = None
+
+            if start_dt is None:
                 filtered = jackpot_records
+            else:
+                start_ts = start_dt.timestamp()
+                filtered = [x for x in jackpot_records if x["timestamp"] >= start_ts]
 
             latest = filtered[0] if filtered else None
             today_records = [x for x in filtered if datetime.fromtimestamp(x["timestamp"]).date()==now.date()]
