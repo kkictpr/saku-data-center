@@ -4,7 +4,7 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import sqlite3
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 import requests
 import time
 import threading
@@ -1425,7 +1425,7 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
     import sqlite3
     import pandas as pd
-    from datetime import datetime, timedelta, timedelta
+    from datetime import datetime, timedelta
 
     try:
 
@@ -1604,11 +1604,9 @@ elif menu == "⛏️ Verus (Mining Farm)":
                 try:
                     if isinstance(x, str):
                         p=x.split(":")
-                        if len(p) < 9:
-                            continue
                         jackpot_records.append({
                             "block": int(p[2]),
-                            "amount": 0.0,
+                            "amount": float(p[8])/100000000,
                             "timestamp": int(p[4])/1000
                         })
                     elif isinstance(x, dict):
@@ -1620,72 +1618,50 @@ elif menu == "⛏️ Verus (Mining Farm)":
                 except Exception:
                     pass
 
-
-            # ใช้ earnings/address เป็นแหล่ง VRSC จริง
-            try:
-                er = requests.get(earnings_url, timeout=10)
-                er.raise_for_status()
-                earn = []
-                now = pd.Timestamp.now()
-                days_map = {"วันนี้":1,"3 วัน":3,"7 วัน":7,"10 วัน":10,"15 วัน":15,"1 เดือน":30,"1 ปี":365}
-                days = days_map.get(period)
-                for row in er.json():
-                    p = row.split(":")
-                    if len(p)==3:
-                        ts = pd.to_datetime(int(p[0]), unit="ms")
-                        if days is None or ts >= now - pd.Timedelta(days=days):
-                            earn.append({"ts": ts, "amount": float(p[2])})
-                latest_amount = highest_amount = total_amount = 0.0
-                jackpot_count = 0
-            except Exception:
-                latest_amount = highest_amount = total_amount = 0.0
-                jackpot_count = 0
             jackpot_records.sort(key=lambda z: z["timestamp"], reverse=True)
 
+            latest = jackpot_records[0] if jackpot_records else None
+            total_amount = sum(x["amount"] for x in jackpot_records)
+            highest = max([x["amount"] for x in jackpot_records], default=0)
+
+            today = datetime.now().date()
+            today_records = [
+                x for x in jackpot_records
+                if datetime.fromtimestamp(x["timestamp"]).date() == today
+            ]
+
+            st.subheader("🏆 Verus Jackpot")
+
             now = datetime.now()
+            period_map = {"วันนี้":0,"3 วัน":3,"7 วัน":7,"15 วัน":15,"1 เดือน":30,"1 ปี":365}
 
-            # ใช้ขอบเขตเป็น "วันปฏิทิน" ของไทย ไม่ใช่ย้อนหลัง 72 ชั่วโมง
-            if period == "วันนี้":
-                start_dt = datetime(now.year, now.month, now.day)
-            elif period == "3 วัน":
-                start_dt = datetime(now.year, now.month, now.day) - timedelta(days=3)
-            elif period == "7 วัน":
-                start_dt = datetime(now.year, now.month, now.day) - timedelta(days=7)
-            elif period == "15 วัน":
-                start_dt = datetime(now.year, now.month, now.day) - timedelta(days=15)
-            elif period == "1 เดือน":
-                start_dt = datetime(now.year, now.month, now.day) - timedelta(days=30)
-            elif period == "1 ปี":
-                start_dt = datetime(now.year, now.month, now.day) - timedelta(days=365)
+            if period == "ทั้งหมด":
+                filtered = sorted(jackpot_records, key=lambda x: x["timestamp"], reverse=True)
             else:
-                start_dt = None
-
-            if start_dt is None:
-                filtered = jackpot_records
-            else:
-                start_ts = start_dt.timestamp()
-                filtered = [x for x in jackpot_records if x["timestamp"] >= start_ts]
+                start_dt = datetime(now.year, now.month, now.day) - timedelta(days=period_map[period])
+                filtered = sorted([x for x in jackpot_records if x["timestamp"] >= start_dt.timestamp()], key=lambda x: x["timestamp"], reverse=True)
 
             latest = filtered[0] if filtered else None
             today_records = [x for x in filtered if datetime.fromtimestamp(x["timestamp"]).date()==now.date()]
 
-            st.subheader("🏆 Verus Jackpot")
+            JACKPOT_REWARD = 0.1
+            count = len(filtered)
 
             c1,c2,c3 = st.columns(3)
-            c1.metric("🏆 จำนวนครั้ง", f"{len(filtered)} ครั้ง")
-            c2.metric("💰 Jackpot ล่าสุด", f"{latest_amount:.8f} VRSC")
-            c3.metric("📈 Jackpot สูงสุด", f"{highest_amount:.8f} VRSC")
+            c1.metric("🏆 จำนวนครั้ง", f"{count} ครั้ง")
+            c2.metric("💰 Jackpot ล่าสุด", f"{JACKPOT_REWARD if count else 0:.8f} VRSC")
+            c3.metric("📈 Jackpot สูงสุด", f"{JACKPOT_REWARD if count else 0:.8f} VRSC")
 
             c4,c5,c6 = st.columns(3)
             c4.metric("🔢 Block ล่าสุด", latest["block"] if latest else "-")
-            c5.metric("💰 Jackpot สะสม", f"{total_amount:.8f} VRSC")
-            c6.metric("⏰ เวลาล่าสุด", datetime.fromtimestamp(latest["timestamp"]).strftime("%d/%m/%Y %H:%M") if latest and latest.get("timestamp") else "-")
+            c5.metric("💰 Jackpot สะสม", f"{count*JACKPOT_REWARD:.8f} VRSC")
+            c6.metric("⏰ เวลาล่าสุด", datetime.fromtimestamp(latest["timestamp"]).strftime("%d/%m/%Y %H:%M") if latest else "-")
 
             st.markdown("---")
 
             c7,c8 = st.columns(2)
             c7.metric("🎯 Jackpot วันนี้", f"{len(today_records)} Block")
-            c8.metric("💰 VRSC วันนี้", f"{sum(x['amount'] for x in today_records):.6f} VRSC")
+            c8.metric("💰 VRSC วันนี้", f"{len(today_records)*JACKPOT_REWARD:.6f} VRSC")
 
         except Exception as e:
             st.error(f"Jackpot API Error: {e}")
