@@ -24,9 +24,7 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SECRET_KEY")
 
-# Supabase is optional for the local dashboard.  Do not prevent the app from
-# starting when a local .env has not been configured yet.
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.set_page_config(page_title="Saku Data Center", layout="wide", initial_sidebar_state="expanded")
 
@@ -127,31 +125,6 @@ def init_db():
         c.execute('''CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT
-        )''')
-
-        # These are read by the Verus dashboard before any collector may have
-        # run. Creating them here keeps a new database usable on its first run.
-        c.execute('''CREATE TABLE IF NOT EXISTS hashrate_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT,
-            hashrate REAL
-        )''')
-        c.execute('''CREATE TABLE IF NOT EXISTS vrsc_daily (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT,
-            paid REAL,
-            balance REAL,
-            immature REAL
-        )''')
-        c.execute('''CREATE TABLE IF NOT EXISTS solar_realtime (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp INTEGER,
-            pv_power REAL,
-            load_power REAL,
-            grid_power REAL,
-            today_energy REAL,
-            total_energy REAL,
-            station_name TEXT
         )''')
         
         conn.commit()
@@ -441,15 +414,37 @@ elif menu == "💰 การเงิน (Finance System)":
 
     st.markdown("---")
 
-    col_left, col_right = st.columns(2)
+    # แถวบน: บันทึกรายรับ / รายจ่าย
+    col_left, col_right = st.columns(2, gap="large")
+
     with col_left:
         st.subheader("📥 บันทึกยอดเงินโอนเข้า / รับเงินสด")
         with st.form("transfer_form"):
-            selected_in_date = st.date_input("เลือกวันที่ทำรายการจริง", value=datetime.now().date(), key="in_date_picker")
-            in_category = st.selectbox("หมวดหมู่รายรับ *", options=["-- กรุณาเลือกหมวดหมู่ --", "ร้านไอศกรีม", "เงินเดือน", "กำไรธุรกิจ", "เงินโอนทั่วไป", "อื่นๆ"], key="in_cat_box")
-            in_target_acc = st.selectbox("รับเข้าบัญชี / ช่องทาง", options=list(acc_options.keys()), format_func=lambda x: acc_options[x], key="in_acc_box")
-            amount_str = st.text_input("จำนวนเงิน (บาท)", placeholder="พิมพ์จำนวนเงิน...", key="trans_amt_str")
-            note = st.text_input("หมายเหตุ / รายละเอียด", key="trans_note_str")
+            selected_in_date = st.date_input(
+                "เลือกวันที่ทำรายการจริง",
+                value=datetime.now().date(),
+                key="in_date_picker"
+            )
+            in_category = st.selectbox(
+                "หมวดหมู่รายรับ *",
+                options=["-- กรุณาเลือกหมวดหมู่ --", "ร้านไอศกรีม", "เงินเดือน", "กำไรธุรกิจ", "เงินโอนทั่วไป", "อื่นๆ"],
+                key="in_cat_box"
+            )
+            in_target_acc = st.selectbox(
+                "รับเข้าบัญชี / ช่องทาง",
+                options=list(acc_options.keys()),
+                format_func=lambda x: acc_options[x],
+                key="in_acc_box"
+            )
+            amount_str = st.text_input(
+                "จำนวนเงิน (บาท)",
+                placeholder="พิมพ์จำนวนเงิน...",
+                key="trans_amt_str"
+            )
+            note = st.text_input(
+                "หมายเหตุ / รายละเอียด",
+                key="trans_note_str"
+            )
             if st.form_submit_button("บันทึกรับเงินเข้า"):
                 amount = safe_float(amount_str)
                 if in_category == "-- กรุณาเลือกหมวดหมู่ --":
@@ -461,25 +456,55 @@ elif menu == "💰 การเงิน (Finance System)":
                     cursor = conn.cursor()
                     current_time_str = datetime.now().strftime('%H:%M:%S')
                     timestamp = f"{selected_in_date.strftime('%Y-%m-%d')} {current_time_str}"
-                    cursor.execute("UPDATE accounts SET balance = balance + ? WHERE account_id = ?", (amount, in_target_acc))
-                    cursor.execute("INSERT INTO transactions (timestamp, type, amount, category, note, account_id) VALUES (?, 'TRANSFER_IN', ?, ?, ?, ?)", (timestamp, amount, in_category, note.strip(), in_target_acc))
+                    cursor.execute(
+                        "UPDATE accounts SET balance = balance + ? WHERE account_id = ?",
+                        (amount, in_target_acc)
+                    )
+                    cursor.execute(
+                        "INSERT INTO transactions (timestamp, type, amount, category, note, account_id) VALUES (?, 'TRANSFER_IN', ?, ?, ?, ?)",
+                        (timestamp, amount, in_category, note.strip(), in_target_acc)
+                    )
                     conn.commit()
                     conn.close()
                     st.success("✅ บันทึกรายรับเรียบร้อย!")
                     st.rerun()
 
-        st.write("")
-        st.subheader("⚙️ สถานะระบบตัดรอบแบ่งยอดอัตโนมัติ")
-        st.success("🤖 **สถานะ:** เปิดใช้งานอัตโนมัติ\n\n📌 **รายละเอียดการหัก/แบ่งยอดอัตโนมัติ (รอบวันที่ 25):**\n• เมื่อถึงรอบวันที่ 25 ระบบจะดึงยอดรายรับจาก **กสิกรไทย 1 (บัญชีรวม)** มาแบ่งเข้าบัญชีเป้าหมายตามสัดส่วน:\n  - ☀️ **กสิกรไทย 2 (กองทุนโซล่า):** 70%\n  - 🛡️ **กรุงไทย 1 (สำรองฉุกเฉิน):** 15%\n  - 📈 **กรุงไทย 2 (ลงทุน):** 15%")
-
     with col_right:
         st.subheader("💸 บันทึกการใช้จ่ายทั่วไป / จ่ายเงินสด")
         with st.form("expense_form"):
-            selected_exp_date = st.date_input("เลือกวันที่ทำรายการจริง", value=datetime.now().date(), key="exp_date_picker")
-            exp_category = st.selectbox("หมวดหมู่รายจ่าย *", options=["-- กรุณาเลือกหมวดหมู่ --", "ร้านไอศกรีม", "Shopping", "ค่าใช้จ่ายส่วนตัว", "อาหาร", "Utilities", "ลงทุน", "อื่นๆ"], key="exp_cat_box")
-            exp_acc = st.selectbox("จ่ายจากช่องทาง", options=list(acc_options.keys()), format_func=lambda x: acc_options[x])
-            exp_amount_str = st.text_input("จำนวนเงิน (บาท)", placeholder="พิมพ์จำนวนเงิน...", key="exp_amt_str")
-            exp_note = st.text_input("รายละเอียดการจ่าย", key="exp_note_str")
+            selected_exp_date = st.date_input(
+                "เลือกวันที่ทำรายการจริง",
+                value=datetime.now().date(),
+                key="exp_date_picker"
+            )
+            exp_category = st.selectbox(
+                "หมวดหมู่รายจ่าย *",
+                options=[
+                    "-- กรุณาเลือกหมวดหมู่ --",
+                    "ร้านไอศกรีม",
+                    "Shopping",
+                    "ค่าใช้จ่ายส่วนตัว",
+                    "อาหาร",
+                    "Utilities",
+                    "ลงทุน",
+                    "อื่นๆ"
+                ],
+                key="exp_cat_box"
+            )
+            exp_acc = st.selectbox(
+                "จ่ายจากช่องทาง",
+                options=list(acc_options.keys()),
+                format_func=lambda x: acc_options[x]
+            )
+            exp_amount_str = st.text_input(
+                "จำนวนเงิน (บาท)",
+                placeholder="พิมพ์จำนวนเงิน...",
+                key="exp_amt_str"
+            )
+            exp_note = st.text_input(
+                "รายละเอียดการจ่าย",
+                key="exp_note_str"
+            )
             if st.form_submit_button("บันทึกการใช้จ่าย"):
                 exp_amount = safe_float(exp_amount_str)
                 if exp_category == "-- กรุณาเลือกหมวดหมู่ --":
@@ -491,20 +516,94 @@ elif menu == "💰 การเงิน (Finance System)":
                     cursor = conn.cursor()
                     current_time_str = datetime.now().strftime('%H:%M:%S')
                     timestamp = f"{selected_exp_date.strftime('%Y-%m-%d')} {current_time_str}"
-                    cursor.execute("UPDATE accounts SET balance = balance - ? WHERE account_id = ?", (exp_amount, exp_acc))
-                    cursor.execute("INSERT INTO transactions (timestamp, type, amount, category, note, account_id) VALUES (?, 'EXPENSE', ?, ?, ?, ?)", (timestamp, exp_amount, exp_category, exp_note.strip(), exp_acc))
+                    cursor.execute(
+                        "UPDATE accounts SET balance = balance - ? WHERE account_id = ?",
+                        (exp_amount, exp_acc)
+                    )
+                    cursor.execute(
+                        "INSERT INTO transactions (timestamp, type, amount, category, note, account_id) VALUES (?, 'EXPENSE', ?, ?, ?, ?)",
+                        (timestamp, exp_amount, exp_category, exp_note.strip(), exp_acc)
+                    )
                     conn.commit()
                     conn.close()
                     st.success("✅ บันทึกการจ่ายเรียบร้อย!")
                     st.rerun()
 
+    # แถวที่สอง: สถานะตัดรอบด้านซ้าย + เครื่องคำนวณ 70/15/15 ด้านขวา
+    st.write("")
+    status_col, calc_col = st.columns(2, gap="large")
+
+    with status_col:
+        st.subheader("⚙️ สถานะระบบตัดรอบแบ่งยอดอัตโนมัติ")
+        st.success(
+            "🤖 **สถานะ:** เปิดใช้งานอัตโนมัติ\n\n"
+            "📌 **รายละเอียดการหัก/แบ่งยอดอัตโนมัติ (รอบวันที่ 25):**\n"
+            "• เมื่อถึงรอบวันที่ 25 ระบบจะดึงยอดรายรับจาก **กสิกรไทย 1 (บัญชีรวม)** "
+            "มาแบ่งเข้าบัญชีเป้าหมายตามสัดส่วน:\n"
+            "  - ☀️ **กสิกรไทย 2 (กองทุนโซล่า):** 70%\n"
+            "  - 🛡️ **กรุงไทย 1 (สำรองฉุกเฉิน):** 15%\n"
+            "  - 📈 **กรุงไทย 2 (ลงทุน):** 15%"
+        )
+
+    with calc_col:
+        st.subheader("💰 เครื่องคำนวณสัดส่วนเงิน (%)")
+
+        split_amount = st.number_input(
+            "ยอดเงินที่ต้องแบ่ง (บาท)",
+            min_value=0.0,
+            value=10000.0,
+            step=100.0,
+            format="%.2f",
+            key="split_amount_dashboard"
+        )
+
+        if "split_result" not in st.session_state:
+            st.session_state.split_result = {
+                "kbank2": round(split_amount * 0.70, 2),
+                "ktb1": round(split_amount * 0.15, 2),
+                "ktb2": round(split_amount * 0.15, 2),
+            }
+
+        if st.button("🧮 คำนวณ", use_container_width=True, key="split_calc_btn"):
+            st.session_state.split_result = {
+                "kbank2": round(split_amount * 0.70, 2),
+                "ktb1": round(split_amount * 0.15, 2),
+                "ktb2": round(split_amount * 0.15, 2),
+            }
+
+        calc1, calc2, calc3 = st.columns(3)
+        with calc1:
+            st.metric("☀️ กสิกรไทย 2", f"{st.session_state.split_result['kbank2']:,.2f} ฿")
+            st.caption("70%")
+        with calc2:
+            st.metric("🛡️ กรุงไทย 1", f"{st.session_state.split_result['ktb1']:,.2f} ฿")
+            st.caption("15%")
+        with calc3:
+            st.metric("📈 กรุงไทย 2", f"{st.session_state.split_result['ktb2']:,.2f} ฿")
+            st.caption("15%")
+
+        st.info("💡 ใส่ยอดเงินแล้วกดปุ่ม 'คำนวณ' เพื่อคำนวณสัดส่วน 70% / 15% / 15%")
+
+    # ฟอร์มแก้ไขยอดบัญชี คงไว้ฝั่งขวาใต้รายจ่าย
+    with col_right:
         st.write("")
         with st.expander("🛠️ แก้ไขยอดเงินในแต่ละบัญชี / เงินสดโดยตรง"):
             with st.form("direct_edit_account_form"):
-                edit_acc_id = st.selectbox("เลือกบัญชี / เงินสด ที่ต้องการแก้ไข", options=list(acc_options.keys()), format_func=lambda x: acc_options[x], key="d_edit_acc")
-                new_exact_balance_str = st.text_input("ระบุยอดเงินใหม่ที่ต้องการตั้งค่า (บาท)", placeholder="พิมพ์ยอดเงินใหม่...", key="dir_edit_bal_str")
-                edit_note = st.text_input("หมายเหตุการแก้ไขยอด", value="ปรับยอดบัญชี/เงินสดตรง")
-
+                edit_acc_id = st.selectbox(
+                    "เลือกบัญชี / เงินสด ที่ต้องการแก้ไข",
+                    options=list(acc_options.keys()),
+                    format_func=lambda x: acc_options[x],
+                    key="d_edit_acc"
+                )
+                new_exact_balance_str = st.text_input(
+                    "ระบุยอดเงินใหม่ที่ต้องการตั้งค่า (บาท)",
+                    placeholder="พิมพ์ยอดเงินใหม่...",
+                    key="dir_edit_bal_str"
+                )
+                edit_note = st.text_input(
+                    "หมายเหตุการแก้ไขยอด",
+                    value="ปรับยอดบัญชี/เงินสดตรง"
+                )
                 if st.form_submit_button("💾 บันทึกยอดเงินใหม่นี้ทันที"):
                     new_exact_balance = safe_float(new_exact_balance_str)
                     if new_exact_balance is None or new_exact_balance < 0:
@@ -514,11 +613,13 @@ elif menu == "💰 การเงิน (Finance System)":
                         conn = sqlite3.connect('datacenter.db', timeout=15)
                         cursor = conn.cursor()
                         cursor.execute("UPDATE accounts SET balance = ? WHERE account_id = ?", (new_exact_balance, edit_acc_id))
-                        cursor.execute("INSERT INTO transactions (timestamp, type, amount, category, note, account_id) VALUES (?, 'EDIT_BALANCE', ?, 'ปรับยอด', ?, ?)",
-                                       (timestamp, new_exact_balance, f"แก้ไขยอดตรง: {edit_note}", edit_acc_id))
+                        cursor.execute(
+                            "INSERT INTO transactions (timestamp, type, amount, category, note, account_id) VALUES (?, 'EDIT_BALANCE', ?, 'ปรับยอด', ?, ?)",
+                            (timestamp, new_exact_balance, f"แก้ไขยอดตรง: {edit_note}", edit_acc_id)
+                        )
                         conn.commit()
                         conn.close()
-                        st.success(f"✅ อัปเดตยอดเรียบร้อย!")
+                        st.success("✅ อัปเดตยอดเรียบร้อย!")
                         st.rerun()
 
     st.markdown("---")
@@ -1313,7 +1414,8 @@ elif menu == "📊 สินทรัพย์รวม (Asset Center)":
                     cg_data = cg.json()
                     thb_price = float(cg_data['verus-coin']['thb'])
                     verus_value = api_balance * thb_price
-            st.markdown(f"{verus_value:,.2f} บาท")
+                    st.markdown(f"{verus_value:,.2f} บาท")
+                    
 
         except:
             st.markdown("0 บาท")
@@ -1328,6 +1430,14 @@ elif menu == "⛏️ Verus (Mining Farm)":
         unsafe_allow_html=True
     )
     st.info("📊 ดึงข้อมูลสถิติเรียลไทม์จาก LuckPool API และราคาเหรียญสดจาก CoinGecko มาคำนวณมูลค่าให้อัตโนมัติ")
+    conn = sqlite3.connect("datacenter.db")
+
+    df_test = pd.read_sql_query(
+    "SELECT COUNT(*) as total FROM vrsc_daily",conn)
+    
+    conn.close()
+
+
     verus_address = "REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
     api_url = f"https://luckpool.net/verus/miner/{verus_address}"
 
@@ -1378,7 +1488,7 @@ elif menu == "⛏️ Verus (Mining Farm)":
         str(total_hashrate).replace("MH", "").replace("GH", "").strip()
     )
         
-        if tg_token and tg_chat_id and hashrate_num < 420 and alert_sent != '1':
+        if hashrate_num < 420 and alert_sent != '1':
             r = requests.post(
                 f"https://api.telegram.org/bot{tg_token}/sendMessage",
                 json={
@@ -1505,8 +1615,19 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
         except:
             pass
-        # Reuse the same connection created above; opening a second one here
-        # leaked database handles on every automatic refresh.
+        conn = sqlite3.connect("datacenter.db")
+
+        df_test = pd.read_sql_query(
+            "SELECT COUNT(*) as total FROM vrsc_daily",
+            conn
+        )
+
+        conn = sqlite3.connect("datacenter.db")
+
+        df_test = pd.read_sql_query(
+        "SELECT COUNT(*) as total FROM vrsc_daily",
+            conn
+        )
 
         df_vrsc = pd.read_sql_query("""
         SELECT *
@@ -1585,99 +1706,144 @@ elif menu == "⛏️ Verus (Mining Farm)":
             mined_today = 0.0
 
         conn.close()
+        st.metric("⛏️ ขุดได้ในช่วงที่เลือก", f"{mined_today:.8f} VRSC")
+
         # ===== LUCKPOOL JACKPOT =====
-        wallet = "REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
+        # LuckPool Earnings API returns:
+        # timestamp:block:amount
+        #
+        # IMPORTANT:
+        # The jackpot amount is present directly in the Earnings API.
+        # We do NOT need to parse the Blocks API or touch parts[6] ("ap").
+        jackpot_url = "https://luckpool.net/verus/earnings/REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
 
         try:
-            r = requests.get(
-                f"https://luckpool.net/verus/blocks/{wallet}",
-                timeout=15,
-                headers={"User-Agent":"Mozilla/5.0"}
-            )
-            r.raise_for_status()
-            data = r.json()
+            jackpot_response = requests.get(jackpot_url, timeout=10)
+            jackpot_response.raise_for_status()
+            jackpot_data = jackpot_response.json()
 
-            if isinstance(data, dict):
-                records = data.get("blocks") or data.get("data") or []
-            elif isinstance(data, list):
-                records = data
-            else:
-                records = []
+            earnings_rows = []
+
+            for item in jackpot_data:
+                if not isinstance(item, str):
+                    continue
+
+                parts = item.split(":")
+                if len(parts) < 3:
+                    continue
+
+                timestamp_text = parts[0].strip()
+                block = parts[1].strip()
+                amount_text = parts[2].strip()
+
+                timestamp_num = pd.to_numeric(timestamp_text, errors="coerce")
+                amount_num = pd.to_numeric(amount_text, errors="coerce")
+
+                if (
+                    pd.isna(timestamp_num)
+                    or pd.isna(amount_num)
+                    or not block
+                    or float(amount_num) <= 0
+                ):
+                    continue
+
+                earnings_rows.append({
+                    "block": block,
+                    "amount": float(amount_num),
+                    "timestamp": float(timestamp_num)
+                })
 
             jackpot_records = []
-            for x in records:
-                try:
-                    if isinstance(x, str):
-                        p=x.split(":")
-                        jackpot_records.append({
-                            "block": int(p[2]),
-                            "amount": float(p[8])/100000000,
-                            "timestamp": int(p[4])/1000
-                        })
-                    elif isinstance(x, dict):
-                        jackpot_records.append({
-                            "block": int(x.get("height") or x.get("block")),
-                            "amount": float(x.get("reward") or x.get("amount") or 0),
-                            "timestamp": int(x.get("timestamp") or x.get("time") or 0)
-                        })
-                except Exception:
-                    pass
 
-            jackpot_records.sort(key=lambda z: z["timestamp"], reverse=True)
+            if earnings_rows:
+                amounts = [row["amount"] for row in earnings_rows]
+                median_amount = float(pd.Series(amounts).median())
 
-            now_th = datetime.now()
-            start_today = datetime(now_th.year, now_th.month, now_th.day)
-            period_days = {"วันนี้":0,"3 วัน":3,"7 วัน":7,"15 วัน":15,"1 เดือน":30,"1 ปี":365}
+                # Normal earnings are around ~0.01 VRSC per round.
+                # LuckPool jackpot rounds appear as a very large outlier.
+                # Use both a dynamic multiplier and a conservative floor so
+                # ordinary high-earning rounds are not shown as jackpots.
+                jackpot_threshold = max(0.05, median_amount * 5.0)
 
-            if period == "ทั้งหมด":
-                filtered = jackpot_records
-            else:
-                days = period_days[period]
-                start = start_today if days == 0 else (start_today - timedelta(days=days-1))
-                end = start_today + timedelta(days=1)
-                filtered = [
-                    x for x in jackpot_records
-                    if start <= datetime.fromtimestamp(x["timestamp"]) < end
-                ]
+                for row in earnings_rows:
+                    if row["amount"] >= jackpot_threshold:
+                        jackpot_records.append(row)
 
-            latest = filtered[0] if filtered else None
-            total_amount = sum(x["amount"] for x in filtered)
-            highest = max([x["amount"] for x in filtered], default=0)
-
-            # earnings/address and blocks/address are separate LuckPool feeds.
-            # Show their combined value as the true mining income for the
-            # selected period, while retaining both components for auditability.
-            total_mined = mined_today + total_amount
-            st.metric("⛏️ ขุดได้รวมในช่วงที่เลือก", f"{total_mined:.8f} VRSC")
-            st.caption(
-                f"รายได้ Pool: {mined_today:.8f} VRSC + "
-                f"Jackpot: {total_amount:.8f} VRSC"
+            # Newest block first.
+            jackpot_records.sort(
+                key=lambda x: int(x["block"]),
+                reverse=True
             )
 
-            today_records = [x for x in filtered if datetime.fromtimestamp(x["timestamp"]).date()==now_th.date()]
+            latest_jackpot = jackpot_records[0] if jackpot_records else None
+            max_jackpot = max(jackpot_records, key=lambda x: x["amount"]) if jackpot_records else None
+            total_jackpot = sum(x["amount"] for x in jackpot_records)
+
+            latest_time = "-"
+            latest_block = "-"
+
+            if latest_jackpot:
+                latest_time = datetime.fromtimestamp(
+                    latest_jackpot["timestamp"]
+                ).strftime("%d/%m/%Y %H:%M")
+                latest_block = latest_jackpot["block"]
+
+            today = datetime.now().date()
+            today_records = [
+                x for x in jackpot_records
+                if datetime.fromtimestamp(x["timestamp"]).date() == today
+            ]
 
             st.subheader("🏆 Verus Jackpot")
 
-            c1,c2,c3 = st.columns(3)
-            c1.metric("🏆 จำนวนครั้ง", f"{len(filtered)} ครั้ง")
-            c2.metric("💰 Jackpot ล่าสุด", f"{latest['amount']:.8f} VRSC" if latest else "0.00000000 VRSC")
-            c3.metric("📈 Jackpot สูงสุด", f"{highest:.8f} VRSC")
+            col1, col2, col3 = st.columns(3)
 
-            c4,c5,c6 = st.columns(3)
-            c4.metric("🔢 Block ล่าสุด", latest["block"] if latest else "-")
-            c5.metric("💰 Jackpot สะสม", f"{total_amount:.8f} VRSC")
-            c6.metric("⏰ เวลาล่าสุด", datetime.fromtimestamp(latest["timestamp"]).strftime("%d/%m/%Y %H:%M") if latest else "-")
+            with col1:
+                st.metric("🏆 จำนวนครั้ง", f"{len(jackpot_records)} ครั้ง")
+
+            with col2:
+                st.metric(
+                    "💰 Jackpot ล่าสุด",
+                    f"{latest_jackpot['amount']:.8f} VRSC" if latest_jackpot else "0.00000000 VRSC"
+                )
+
+            with col3:
+                st.metric(
+                    "📈 Jackpot สูงสุด",
+                    f"{max_jackpot['amount']:.8f} VRSC" if max_jackpot else "0.00000000 VRSC"
+                )
+
+            col4, col5, col6 = st.columns(3)
+
+            with col4:
+                st.metric("🔢 Block ล่าสุด", latest_block)
+
+            with col5:
+                st.metric("💰 Jackpot สะสม", f"{total_jackpot:.8f} VRSC")
+
+            with col6:
+                st.metric("⏰ เวลาล่าสุด", latest_time)
 
             st.markdown("---")
 
-            c7,c8 = st.columns(2)
-            c7.metric("🎯 Jackpot วันนี้", f"{len(today_records)} Block")
-            c8.metric("💰 VRSC วันนี้", f"{sum(x['amount'] for x in today_records):.6f} VRSC")
+            c7, c8 = st.columns(2)
 
+            with c7:
+                st.metric("🎯 Jackpot วันนี้", f"{len(today_records)} Block")
+
+            with c8:
+                st.metric(
+                    "💰 VRSC วันนี้",
+                    f"{sum(x['amount'] for x in today_records):.6f} VRSC"
+                )
+
+            if not today_records:
+                st.info("วันนี้ยังไม่มี Jackpot จาก LuckPool")
+                
         except Exception as e:
-            st.metric("⛏️ รายได้ Pool ในช่วงที่เลือก", f"{mined_today:.8f} VRSC")
-            st.caption("ยังดึงข้อมูล Jackpot ไม่ได้ จึงยังไม่รวมรางวัล Block ในยอดนี้")
             st.error(f"Jackpot API Error: {e}")
+
+        
 
         if not df_hash.empty:
 
@@ -1844,17 +2010,16 @@ elif menu == "☀️ Solar (Solar System)":
     st.markdown("<h2>☀️ ระบบโซลาร์เซลล์ (Solar System)</h2>", unsafe_allow_html=True)
     st.info("📡 ข้อมูลจาก SOLARMAN Collector")
 
-    try:
-        conn = sqlite3.connect("datacenter.db", timeout=15)
-        df_solar = pd.read_sql_query("""
-        SELECT *
-        FROM solar_realtime
-        ORDER BY timestamp DESC
-        LIMIT 1
-        """, conn)
-        conn.close()
-    except Exception:
-        df_solar = pd.DataFrame()
+    conn = sqlite3.connect("datacenter.db")
+
+    df_solar = pd.read_sql_query("""
+    SELECT *
+    FROM solar_realtime
+    ORDER BY timestamp DESC
+    LIMIT 1
+    """, conn)
+
+    conn.close()
 
 
     if not df_solar.empty:
@@ -2014,13 +2179,13 @@ elif menu == "☀️ Solar (Solar System)":
             <div style="font-size:22px;font-weight:bold;color:#22c55e;">
                 {sell_kw:.2f} kW
             </div>
-            </div>
+
         """, unsafe_allow_html=True)
         
-        try:
-            ts = datetime.fromtimestamp(int(timestamp)).strftime("%d/%m/%Y %H:%M:%S") if timestamp else "-"
-        except (TypeError, ValueError, OSError):
-            ts = str(timestamp) if timestamp else "-"
+        ts = (
+            datetime.fromtimestamp(int(timestamp)).strftime("%d/%m/%Y %H:%M:%S")
+            if timestamp else "-"
+        )
         st.caption(f"อัปเดตล่าสุด {ts}")
 
     else:
