@@ -1702,178 +1702,230 @@ elif menu == "⛏️ Verus (Mining Farm)":
         conn.close()
         st.metric("⛏️ ขุดได้ในช่วงที่เลือก", f"{mined_today:.8f} VRSC")
 
-        # ===== LUCKPOOL JACKPOT (ข้อมูลจริงจาก LuckPool Miner API) =====
-        # LuckPool documents "blocks/address" as the Miner API endpoint
-        # for "Blocks found by miner". The miner page presents these as
-        # "Miner Jackpots". We therefore read jackpot records directly
-        # instead of guessing jackpots from normal earnings/block rewards.
+        # ===== LUCKPOOL JACKPOT (ตรงจากรายการ Blocks ที่ LuckPool ผูกกับ Miner) =====
+        # LuckPool ระบุ Miner API ว่า blocks/address = Blocks found by miner
+        # และหน้า Miner แสดงรายการเหล่านี้ในหัวข้อ "Miner Jackpots".
+        # ดังนั้นจำนวนรายการ Block ที่ Miner พบ = จำนวน Jackpot
+        # และ Jackpot ต่อครั้งของ Verus ปัจจุบัน = 0.1 VRSC
         #
-        # LuckPool currently describes the Miner's Jackpot as a fixed
-        # 0.1 VRSC reward for finding a block.
+        # จุดสำคัญ:
+        # - ไม่ใช้ Earnings มาตีความว่าเป็น Jackpot
+        # - ไม่ใช้ยอด Block Reward ~3 VRSC เป็น Jackpot
+        # - ใช้ timestamp จากข้อมูล Block ของ LuckPool เพื่อรองรับตัวเลือกช่วงเวลา
         from zoneinfo import ZoneInfo
 
         luckpool_address = verus_address
         jackpot_records = []
-        jackpot_api_used = None
-
-        def _normalize_luckpool_items(payload):
-            if isinstance(payload, list):
-                return payload
-            if isinstance(payload, dict):
-                for key in ("blocks", "jackpots", "data", "results"):
-                    value = payload.get(key)
-                    if isinstance(value, list):
-                        return value
-            return []
-
-        def _parse_luckpool_jackpot(item):
-            if isinstance(item, dict):
-                block = item.get("block") or item.get("height") or item.get("blockHeight")
-                worker = item.get("worker") or item.get("workerName") or item.get("name") or "-"
-                raw_time = item.get("timestamp") or item.get("time") or item.get("date") or item.get("found")
-                raw_amount = item.get("amount") or item.get("reward") or item.get("jackpot") or 0.1
-            elif isinstance(item, str):
-                parts = item.split(":")
-                if len(parts) >= 3:
-                    raw_time, block, worker = parts[:3]
-                elif len(parts) == 2:
-                    block, worker = parts
-                    raw_time = None
-                else:
-                    return None
-                raw_amount = 0.1
-            else:
-                return None
-
-            if block is None or raw_time is None:
-                return None
-
-            try:
-                amount = float(raw_amount)
-            except (TypeError, ValueError):
-                amount = 0.1
-
-            try:
-                if isinstance(raw_time, (int, float)) or (
-                    isinstance(raw_time, str) and raw_time.strip().isdigit()
-                ):
-                    ts_num = float(raw_time)
-                    if ts_num > 10**11:
-                        ts_num /= 1000.0
-                    dt = datetime.fromtimestamp(
-                        ts_num, tz=ZoneInfo("UTC")
-                    ).astimezone(ZoneInfo("Asia/Bangkok"))
-                else:
-                    dt = pd.to_datetime(raw_time, utc=True).to_pydatetime()
-                    dt = dt.astimezone(ZoneInfo("Asia/Bangkok"))
-            except Exception:
-                return None
-
-            return {
-                "block": str(block),
-                "worker": str(worker),
-                "timestamp": dt,
-                "amount": amount if amount > 0 else 0.1,
-            }
-
-        jackpot_api_candidates = [
-            f"https://luckpool.net/verus/blocks/{luckpool_address}",
-            f"https://luckpool.net/verus/blocks/address/{luckpool_address}",
-            f"https://luckpool.net/verus/blocks?address={luckpool_address}",
-        ]
 
         try:
-            headers = {"User-Agent": "Mozilla/5.0"}
+            jackpot_url = f"https://luckpool.net/verus/blocks/{luckpool_address}"
+            jackpot_response = requests.get(
+                jackpot_url,
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=15
+            )
+            jackpot_response.raise_for_status()
+            jackpot_data = jackpot_response.json()
 
-            for candidate in jackpot_api_candidates:
+            if isinstance(jackpot_data, dict):
+                records = (
+                    jackpot_data.get("blocks")
+                    or jackpot_data.get("data")
+                    or jackpot_data.get("results")
+                    or []
+                )
+            elif isinstance(jackpot_data, list):
+                records = jackpot_data
+            else:
+                records = []
+
+            # LuckPool block strings historically use the fields:
+            # p[2] = block height, p[4] = timestamp(ms)
+            # Other deployments may return dictionaries, so support both.
+            for item in records:
                 try:
-                    response = requests.get(candidate, headers=headers, timeout=10)
-                    response.raise_for_status()
-                    payload = response.json()
+                    if isinstance(item, str):
+                        parts = item.split(":")
+                        if len(parts) < 5:
+                            continue
 
-                    jackpot_api_used = candidate
+                        block_value = int(parts[2])
 
-                    for item in _normalize_luckpool_items(payload):
-                        parsed = _parse_luckpool_jackpot(item)
-                        if parsed is not None:
-                            jackpot_records.append(parsed)
+                        raw_ts = float(parts[4])
+                        if raw_ts > 10**11:
+                            raw_ts /= 1000.0
 
-                    break
-                except Exception:
+                    elif isinstance(item, dict):
+                        block_value = int(
+                            item.get("height")
+                            or item.get("block")
+                            or item.get("blockHeight")
+                        )
+
+                        raw_ts = float(
+                            item.get("timestamp")
+                            or item.get("time")
+                            or item.get("created")
+                            or 0
+                        )
+                        if raw_ts > 10**11:
+                            raw_ts /= 1000.0
+                    else:
+                        continue
+
+                    if raw_ts <= 0:
+                        continue
+
+                    dt_bkk = datetime.fromtimestamp(
+                        raw_ts,
+                        tz=ZoneInfo("Asia/Bangkok")
+                    )
+
+                    jackpot_records.append({
+                        "block": block_value,
+                        "timestamp": dt_bkk,
+                        "amount": 0.10,
+                    })
+
+                except (TypeError, ValueError, IndexError, KeyError):
                     continue
 
+            # กันรายการซ้ำ หาก LuckPool API ส่ง record เดิมซ้ำ
+            unique_records = {}
+            for rec in jackpot_records:
+                unique_records[(rec["block"], rec["timestamp"].isoformat())] = rec
+
+            jackpot_records = list(unique_records.values())
             jackpot_records.sort(
                 key=lambda x: x["timestamp"],
                 reverse=True
             )
 
-            latest_jackpot = jackpot_records[0] if jackpot_records else None
-            max_jackpot = (
-                max(jackpot_records, key=lambda x: x["amount"])
-                if jackpot_records else None
+            # กรองตามตัวเลือกช่วงเวลาบนหน้าจอเดียวกัน
+            now_bkk = datetime.now(ZoneInfo("Asia/Bangkok"))
+
+            days_map = {
+                "วันนี้": 1,
+                "3 วัน": 3,
+                "7 วัน": 7,
+                "15 วัน": 15,
+                "1 เดือน": 30,
+                "1 ปี": 365,
+            }
+
+            selected_days = days_map.get(period)
+
+            if selected_days is None:
+                selected_jackpots = jackpot_records
+            elif period == "วันนี้":
+                selected_jackpots = [
+                    x for x in jackpot_records
+                    if x["timestamp"].date() == now_bkk.date()
+                ]
+            else:
+                start_time = now_bkk - pd.Timedelta(days=selected_days)
+                selected_jackpots = [
+                    x for x in jackpot_records
+                    if x["timestamp"] >= start_time
+                ]
+
+            latest_jackpot = (
+                selected_jackpots[0]
+                if selected_jackpots
+                else None
             )
-            total_jackpot = sum(x["amount"] for x in jackpot_records)
 
-            latest_time = "-"
-            latest_block = "-"
-
-            if latest_jackpot:
-                latest_time = latest_jackpot["timestamp"].strftime("%d/%m/%Y %H:%M")
-                latest_block = latest_jackpot["block"]
-
-            local_today = datetime.now(ZoneInfo("Asia/Bangkok")).date()
-            today_records = [
-                x for x in jackpot_records
-                if x["timestamp"].date() == local_today
-            ]
+            jackpot_count = len(selected_jackpots)
+            jackpot_total = sum(
+                x["amount"] for x in selected_jackpots
+            )
+            jackpot_highest = (
+                max(x["amount"] for x in selected_jackpots)
+                if selected_jackpots
+                else 0.0
+            )
 
             st.subheader("🏆 Verus Jackpot")
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("🏆 จำนวนครั้ง", f"{len(jackpot_records)} ครั้ง")
-            with col2:
-                st.metric(
-                    "💰 Jackpot ล่าสุด",
-                    f"{latest_jackpot['amount']:.8f} VRSC"
-                    if latest_jackpot else "0.00000000 VRSC"
-                )
-            with col3:
-                st.metric(
-                    "📈 Jackpot สูงสุด",
-                    f"{max_jackpot['amount']:.8f} VRSC"
-                    if max_jackpot else "0.00000000 VRSC"
-                )
+            c1, c2, c3 = st.columns(3)
 
-            col4, col5, col6 = st.columns(3)
-            with col4:
-                st.metric("🔢 Block ล่าสุด", latest_block)
-            with col5:
-                st.metric("💰 Jackpot สะสม", f"{total_jackpot:.8f} VRSC")
-            with col6:
-                st.metric("⏰ เวลาล่าสุด", latest_time)
+            c1.metric(
+                "🏆 จำนวนครั้ง",
+                f"{jackpot_count} ครั้ง"
+            )
+
+            c2.metric(
+                "💰 Jackpot ล่าสุด",
+                f"{latest_jackpot['amount']:.8f} VRSC"
+                if latest_jackpot
+                else "0.00000000 VRSC"
+            )
+
+            c3.metric(
+                "📈 Jackpot สูงสุด",
+                f"{jackpot_highest:.8f} VRSC"
+            )
+
+            c4, c5, c6 = st.columns(3)
+
+            c4.metric(
+                "🔢 Block ล่าสุด",
+                str(latest_jackpot["block"])
+                if latest_jackpot
+                else "-"
+            )
+
+            c5.metric(
+                "💰 Jackpot สะสม",
+                f"{jackpot_total:.8f} VRSC"
+            )
+
+            c6.metric(
+                "⏰ เวลาล่าสุด",
+                latest_jackpot["timestamp"].strftime("%d/%m/%Y %H:%M")
+                if latest_jackpot
+                else "-"
+            )
 
             st.markdown("---")
 
             c7, c8 = st.columns(2)
-            with c7:
-                st.metric("🎯 Jackpot วันนี้", f"{len(today_records)} Block")
-            with c8:
-                st.metric(
-                    "💰 VRSC วันนี้",
-                    f"{sum(x['amount'] for x in today_records):.6f} VRSC"
+
+            if period == "วันนี้":
+                today_count = jackpot_count
+                today_amount = jackpot_total
+            else:
+                today_records = [
+                    x for x in jackpot_records
+                    if x["timestamp"].date() == now_bkk.date()
+                ]
+                today_count = len(today_records)
+                today_amount = sum(
+                    x["amount"] for x in today_records
                 )
 
-            if not jackpot_api_used:
-                st.error(
-                    "❌ อ่านข้อมูล Miner Jackpot จาก LuckPool API ไม่สำเร็จ "
-                    "จึงไม่ใช้ค่าเดาจาก Earnings/Block Reward"
+            c7.metric(
+                "🎯 Jackpot วันนี้",
+                f"{today_count} Block"
+            )
+
+            c8.metric(
+                "💰 VRSC วันนี้",
+                f"{today_amount:.6f} VRSC"
+            )
+
+            if not jackpot_records:
+                st.warning(
+                    "⚠️ LuckPool API ไม่ส่งรายการ Block Jackpot กลับมา "
+                    "จึงไม่ใช้ค่าประมาณจาก Earnings"
                 )
-            elif not today_records:
-                st.info("วันนี้ยังไม่มี Jackpot จาก LuckPool")
 
         except Exception as e:
-            st.error(f"LuckPool Jackpot API Error: {e}")
+            st.error(
+                f"LuckPool Jackpot API Error: "
+                f"{type(e).__name__}: {e}"
+            )
+
 
         if not df_hash.empty:
 
