@@ -2287,7 +2287,7 @@ elif menu == "🍦 ร้านไอศกรีม (Ice Cream)":
         st.title("🛒 หน้าจอขายสินค้า (POS Dashboard - Loyverse Style)")
         
         conn = sqlite3.connect('datacenter.db', timeout=15)
-        conn.execute('''CREATE TABLE IF NOT EXISTS pos_cart_temp (๗
+        conn.execute('''CREATE TABLE IF NOT EXISTS pos_cart_temp (
             item_id TEXT PRIMARY KEY,
             name TEXT,
             price REAL,
