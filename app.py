@@ -1600,20 +1600,6 @@ elif menu == "⛏️ Verus (Mining Farm)":
     except Exception as e:
         st.error(f"LuckPool Jackpot API Error: {type(e).__name__}: {e}")
 
-    with st.expander("🔍 Jackpot Debug"):
-        st.write("History:", len(records))
-        st.write("Reward map:", len(reward_map))
-        st.write("Jackpot:", len(jackpot_records))
-
-    st.subheader("🎰 LuckPool Jackpot")
-
-    if jackpot_records:
-        jackpot_df = pd.DataFrame(jackpot_records).sort_values("timestamp", ascending=False)
-        st.metric("จำนวน Jackpot", len(jackpot_df))
-        st.dataframe(jackpot_df.rename(columns={"block":"Block","timestamp":"เวลา","amount":"Jackpot (VRSC)"}), use_container_width=True, hide_index=True)
-    else:
-        st.info("ยังไม่พบ Jackpot ในช่วงเวลาที่เลือก")
-
     st.markdown("---")
     st.subheader("📈 Hashrate Analytics")
 
@@ -1774,6 +1760,22 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
         conn.close()
         st.metric("⛏️ ขุดได้ในช่วงที่เลือก", f"{mined_today:.8f} VRSC")
+
+        with st.expander("🔍 Jackpot Debug"):
+            st.write("History:", len(records))
+            st.write("Reward map:", len(reward_map))
+            st.write("Jackpot:", len(jackpot_records))
+
+        st.subheader("🎰 LuckPool Jackpot")
+
+        if jackpot_records:
+            jackpot_df = pd.DataFrame(jackpot_records).sort_values("timestamp", ascending=False)
+            st.metric("จำนวน Jackpot", len(jackpot_df))
+            st.dataframe(jackpot_df.rename(columns={"block":"Block","timestamp":"เวลา","amount":"Jackpot (VRSC)"}), use_container_width=True, hide_index=True)
+        else:
+            st.info("ยังไม่พบ Jackpot ในช่วงเวลาที่เลือก")
+
+
 
         # ===== LUCKPOOL JACKPOT (ตรงจากรายการ Blocks ที่ LuckPool ผูกกับ Miner) =====
         # LuckPool ระบุ Miner API ว่า blocks/address = Blocks found by miner
