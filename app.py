@@ -1425,7 +1425,7 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
     import sqlite3
     import pandas as pd
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
     try:
 
@@ -1620,8 +1620,9 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
             jackpot_records.sort(key=lambda z: z["timestamp"], reverse=True)
 
-            now_th = datetime.now()
-            start_today = datetime(now_th.year, now_th.month, now_th.day)
+            TH_TZ = timezone(timedelta(hours=7))
+            now_th = datetime.now(TH_TZ)
+            start_today = datetime(now_th.year, now_th.month, now_th.day, tzinfo=TH_TZ)
             period_days = {"วันนี้":0,"3 วัน":3,"7 วัน":7,"15 วัน":15,"1 เดือน":30,"1 ปี":365}
 
             if period == "ทั้งหมด":
@@ -1632,14 +1633,14 @@ elif menu == "⛏️ Verus (Mining Farm)":
                 end = start_today + timedelta(days=1)
                 filtered = [
                     x for x in jackpot_records
-                    if start <= datetime.fromtimestamp(x["timestamp"]) < end
+                    if start <= datetime.fromtimestamp(x["timestamp"], tz=timezone.utc).astimezone(TH_TZ) < end
                 ]
 
             latest = filtered[0] if filtered else None
             total_amount = sum(x["amount"] for x in filtered)
             highest = max([x["amount"] for x in filtered], default=0)
 
-            today_records = [x for x in filtered if datetime.fromtimestamp(x["timestamp"]).date()==now_th.date()]
+            today_records = [x for x in filtered if datetime.fromtimestamp(x["timestamp"], tz=timezone.utc).astimezone(TH_TZ).date()==now_th.date()]
 
             st.subheader("🏆 Verus Jackpot")
 
@@ -1651,7 +1652,7 @@ elif menu == "⛏️ Verus (Mining Farm)":
             c4,c5,c6 = st.columns(3)
             c4.metric("🔢 Block ล่าสุด", latest["block"] if latest else "-")
             c5.metric("💰 Jackpot สะสม", f"{total_amount:.8f} VRSC")
-            c6.metric("⏰ เวลาล่าสุด", datetime.fromtimestamp(latest["timestamp"]).strftime("%d/%m/%Y %H:%M") if latest else "-")
+            c6.metric("⏰ เวลาล่าสุด", datetime.fromtimestamp(latest["timestamp"], tz=timezone.utc).astimezone(TH_TZ).strftime("%d/%m/%Y %H:%M") if latest else "-")
 
             st.markdown("---")
 
