@@ -1611,8 +1611,8 @@ elif menu == "⛏️ Verus (Mining Farm)":
             for row in br.json():
                 try:
                     parts=row.split(":")
-                    block=int(parts[2].replace("\\:",""))
-                    ts=int(parts[4].replace("\\:",""))//1000
+                    block=int(parts[2].rstrip("\\"))
+                    ts=int(parts[4].rstrip("\\"))//1000
                     jackpot_records.append({
                         "block":block,
                         "timestamp":ts,
