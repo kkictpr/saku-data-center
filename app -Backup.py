@@ -1584,25 +1584,37 @@ elif menu == "⛏️ Verus (Mining Farm)":
         wallet = "REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
 
         try:
-            er = requests.get(
-                f"https://luckpool.net/verus/earnings/{wallet}",
+            r = requests.get(
+                f"https://luckpool.net/verus/blocks/{wallet}",
                 timeout=15,
                 headers={"User-Agent":"Mozilla/5.0"}
             )
-            er.raise_for_status()
-            earnings = er.json()
+            r.raise_for_status()
+            data = r.json()
+
+            if isinstance(data, dict):
+                records = data.get("blocks") or data.get("data") or []
+            elif isinstance(data, list):
+                records = data
+            else:
+                records = []
 
             jackpot_records = []
-            for item in earnings:
+            for x in records:
                 try:
-                    parts = item.split(":")
-                    if len(parts) != 3:
-                        continue
-                    jackpot_records.append({
-                        "timestamp": int(parts[0]) // 1000,
-                        "block": int(parts[1]),
-                        "amount": float(parts[2])
-                    })
+                    if isinstance(x, str):
+                        p=x.split(":")
+                        jackpot_records.append({
+                            "block": int(p[2]),
+                            "amount": float(p[8])/100000000,
+                            "timestamp": int(p[4])/1000
+                        })
+                    elif isinstance(x, dict):
+                        jackpot_records.append({
+                            "block": int(x.get("height") or x.get("block")),
+                            "amount": float(x.get("reward") or x.get("amount") or 0),
+                            "timestamp": int(x.get("timestamp") or x.get("time") or 0)
+                        })
                 except Exception:
                     pass
 
@@ -1623,14 +1635,11 @@ elif menu == "⛏️ Verus (Mining Farm)":
                     if start <= datetime.fromtimestamp(x["timestamp"]) < end
                 ]
 
-            # Jackpot = โบนัสต่อ Block (เฉพาะรางวัลก้อนใหญ่ ~0.1 VRSC)
-            jackpot_only = [x for x in filtered if x["amount"] >= 0.10]
+            latest = filtered[0] if filtered else None
+            total_amount = sum(x["amount"] for x in filtered)
+            highest = max([x["amount"] for x in filtered], default=0)
 
-            latest = jackpot_only[0] if jackpot_only else None
-            total_amount = sum(x["amount"] for x in jackpot_only)
-            highest = max([x["amount"] for x in jackpot_only], default=0)
-
-            today_records = [x for x in jackpot_only if datetime.fromtimestamp(x["timestamp"]).date()==now_th.date()]
+            today_records = [x for x in filtered if datetime.fromtimestamp(x["timestamp"]).date()==now_th.date()]
 
             st.subheader("🏆 Verus Jackpot")
 
