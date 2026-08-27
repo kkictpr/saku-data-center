@@ -1547,64 +1547,60 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
     luckpool_address = verus_address
     jackpot_records = []
+    reward_map = {}
+    records = []
 
     try:
-        jackpot_url = f"https://luckpool.net/verus/miner/history/{luckpool_address}"
-        jackpot_response = requests.get(
-            jackpot_url,
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=15
-        )
-        jackpot_response.raise_for_status()
-        jackpot_data = jackpot_response.json()
+        earnings_url = f"https://luckpool.net/verus/earnings/{luckpool_address}"
+        earnings_resp = requests.get(earnings_url, headers={"User-Agent":"Mozilla/5.0"}, timeout=15)
+        earnings_resp.raise_for_status()
+        for item in earnings_resp.json():
+            try:
+                p=item.split(":")
+                if len(p)>=3:
+                    reward_map[int(p[1])] = float(p[2])
+            except Exception:
+                pass
 
-        records = jackpot_data if isinstance(jackpot_data, list) else []
+        jackpot_url = f"https://luckpool.net/verus/miner/history/{luckpool_address}"
+        jackpot_response = requests.get(jackpot_url, headers={"User-Agent":"Mozilla/5.0"}, timeout=15)
+        jackpot_response.raise_for_status()
+        records = jackpot_response.json() if isinstance(jackpot_response.json(), list) else []
+
+        today_start = datetime.now(ZoneInfo("Asia/Bangkok")).replace(hour=0, minute=0, second=0, microsecond=0)
 
         for item in records:
             try:
                 if not isinstance(item, str):
                     continue
-
-                parts = item.split(":")
-                if len(parts) != 3:
+                parts=item.split(":")
+                if len(parts)!=3:
                     continue
-
-                raw_ts = int(parts[0]) / 1000
-                block_value = int(parts[1])
-                reward = reward_map.get(block_value, float(parts[2]))
-
-                dt_bkk = datetime.fromtimestamp(raw_ts, tz=ZoneInfo("Asia/Bangkok"))
-
-                jackpot_records.append({
-                    "block": block_value,
-                    "timestamp": dt_bkk,
-                    "amount": reward,
-                })
+                ts=int(parts[0])/1000
+                block_value=int(parts[1])
+                dt_bkk=datetime.fromtimestamp(ts, tz=ZoneInfo("Asia/Bangkok"))
+                if dt_bkk < today_start:
+                    continue
+                amount=reward_map.get(block_value)
+                if amount is None:
+                    continue
+                jackpot_records.append({"block":block_value,"timestamp":dt_bkk,"amount":amount})
             except Exception:
                 continue
-
     except Exception as e:
-        st.error(
-            f"LuckPool Jackpot API Error: "
-            f"{type(e).__name__}: {e}"
-        )
+        st.error(f"LuckPool Jackpot API Error: {type(e).__name__}: {e}")
 
-
+    with st.expander("🔍 Jackpot Debug"):
+        st.write("History:", len(records))
+        st.write("Reward map:", len(reward_map))
+        st.write("Jackpot:", len(jackpot_records))
 
     st.subheader("🎰 LuckPool Jackpot")
 
     if jackpot_records:
         jackpot_df = pd.DataFrame(jackpot_records).sort_values("timestamp", ascending=False)
         st.metric("จำนวน Jackpot", len(jackpot_df))
-        st.dataframe(
-            jackpot_df.rename(columns={
-                "block": "Block",
-                "timestamp": "เวลา",
-                "amount": "Jackpot (VRSC)"
-            }),
-            use_container_width=True,
-            hide_index=True
-        )
+        st.dataframe(jackpot_df.rename(columns={"block":"Block","timestamp":"เวลา","amount":"Jackpot (VRSC)"}), use_container_width=True, hide_index=True)
     else:
         st.info("ยังไม่พบ Jackpot ในช่วงเวลาที่เลือก")
 
