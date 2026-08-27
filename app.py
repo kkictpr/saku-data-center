@@ -1624,7 +1624,7 @@ elif menu == "⛏️ Verus (Mining Farm)":
                 ]
 
             # Jackpot = โบนัสต่อ Block (เฉพาะรางวัลก้อนใหญ่ ~0.1 VRSC)
-            jackpot_only = [x for x in filtered if x["amount"] >= 0.10]
+            jackpot_only = [x for x in filtered if 0.09 <= x["amount"] <= 0.12]
 
             latest = jackpot_only[0] if jackpot_only else None
             total_amount = sum(x["amount"] for x in jackpot_only)
@@ -1635,7 +1635,7 @@ elif menu == "⛏️ Verus (Mining Farm)":
             st.subheader("🏆 Verus Jackpot")
 
             c1,c2,c3 = st.columns(3)
-            c1.metric("🏆 จำนวนครั้ง", f"{len(filtered)} ครั้ง")
+            c1.metric("🏆 จำนวนครั้ง", f"{len(jackpot_only)} ครั้ง")
             c2.metric("💰 Jackpot ล่าสุด", f"{latest['amount']:.8f} VRSC" if latest else "0.00000000 VRSC")
             c3.metric("📈 Jackpot สูงสุด", f"{highest:.8f} VRSC")
 
