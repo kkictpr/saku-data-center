@@ -312,7 +312,7 @@ menu_options = [
 if 'nav_menu' not in st.session_state:
     st.session_state['nav_menu'] = "หน้าแรก (Portal Hub)"
 
-selected_menu = st.sidebar.radio("เลือกเมนูหลัก:", menu_options, index=menu_options.index(st.session_state['nav_menu']) if st.session_state['nav_menu'] in menu_options else 0)
+selected_menu = st.sidebar.radio("เลือกเมนูหลัก:", menu_options, index=menu_options.index(st.session_state['nav_menu']) if st.session_state['nav_menu'] in menu_options else 0, key="main_nav_radio")
 st.session_state['nav_menu'] = selected_menu
 menu = st.session_state['nav_menu']
 
