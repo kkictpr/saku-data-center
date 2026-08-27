@@ -2223,7 +2223,7 @@ elif menu == "🍦 ร้านไอศกรีม (Ice Cream)":
                 b_total = ord_row['ยอดรวม (บาท)']
                 b_pay = ord_row['วิธีชำระเงิน']
 
-                col_r1, col_r2, col_r3, col_r4, col_r5, col_r6 = st.columns([1, 2, 4, 2, 2, 2])
+                col_r1, col_r2, col_r3, col_r4, col_r5, col_r6 = st.columns([1, 2, 4, 2, 2, 2])กกก
                 col_r1.write(f"**#{b_id}**")
                 col_r2.write(b_time)
                 col_r3.write(b_items)
