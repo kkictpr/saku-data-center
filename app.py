@@ -337,38 +337,32 @@ if menu == "หน้าแรก (Portal Hub)":
     """, unsafe_allow_html=True)
     st.markdown("---")
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("💰 การเงิน (Finance System)"):
-            st.session_state['nav_menu'] = "💰 การเงิน (Finance System)"
-            st.rerun()
-    with col2:
-        if st.button("⛏️ Verus (Mining Farm)"):
-            st.session_state['nav_menu'] = "⛏️ Verus (Mining Farm)"
-            st.rerun()
-    with col3:
-        if st.button("☀️ Solar (Solar System)"):
-            st.session_state['nav_menu'] = "☀️ Solar (Solar System)"
-            st.rerun()
+    # ปุ่มเมนูหลักบน Portal Hub — ทุกปุ่มเปิดหน้าที่ตรงกับ Sidebar
+    portal_buttons = [
+        ("💰 การเงิน (Finance System)", "💰 การเงิน (Finance System)"),
+        ("⛏️ Verus (Mining Farm)", "⛏️ Verus (Mining Farm)"),
+        ("☀️ Solar (Solar System)", "☀️ Solar (Solar System)"),
+        ("📈 หุ้นและการลงทุน (Investment)", "📈 หุ้นและการลงทุน (Investment)"),
+        ("📊 สินทรัพย์รวม (Asset Center)", "📊 สินทรัพย์รวม (Asset Center)"),
+        ("🎯 Freedom Tracker", "🎯 Freedom Tracker"),
+        ("📱 Telegram Center", "📱 Telegram Center"),
+        ("🍦 ร้านไอศกรีม (Ice Cream)", "🍦 ร้านไอศกรีม (Ice Cream)"),
+        ("🌾 นาข้าว (Rice Farm)", "🌾 นาข้าว (Rice Farm)"),
+        ("🏢 หอพัก (Rental Room)", "🏢 หอพัก (Rental Room)"),
+    ]
 
-    col4, col5, col6 = st.columns(3)
-    with col4:
-        if st.button("🍦 ร้านไอศกรีม (Ice Cream)"):
-            st.session_state['nav_menu'] = "🍦 ร้านไอศกรีม (Ice Cream)"
-            st.rerun()
-    with col5:
-        if st.button("🌾 นาข้าว (Rice Farm)"):
-            st.session_state['nav_menu'] = "🌾 นาข้าว (Rice Farm)"
-            st.rerun()
-    with col6:
-        if st.button("🏢 หอพัก (Rental Room)"):
-            st.session_state['nav_menu'] = "🏢 หอพัก (Rental Room)"
-            st.rerun()
-    with col6:
-        if st.button("📊 สินทรัพย์รวม (Asset Center)"):
-            st.session_state['nav_menu'] = "📊 สินทรัพย์รวม (Asset Center)"
-            st.rerun()
-            
+    for row_start in range(0, len(portal_buttons), 3):
+        cols = st.columns(3)
+        for col, (label, target_menu) in zip(cols, portal_buttons[row_start:row_start + 3]):
+            with col:
+                if st.button(
+                    label,
+                    use_container_width=True,
+                    key=f"portal_btn_{row_start}_{target_menu}"
+                ):
+                    st.session_state['nav_menu'] = target_menu
+                    st.rerun()
+
 
 elif menu == "💰 การเงิน (Finance System)":
     if st.button("⬅️ กลับหน้าแรก (Portal Hub)"):
@@ -1549,6 +1543,78 @@ elif menu == "⛏️ Verus (Mining Farm)":
     )
 
     st.markdown("---")
+    from zoneinfo import ZoneInfo
+
+    luckpool_address = verus_address
+    jackpot_records = []
+    reward_map = {}
+    records = []
+
+    try:
+        earnings_url = f"https://luckpool.net/verus/earnings/{luckpool_address}"
+        earnings_resp = requests.get(earnings_url, headers={"User-Agent":"Mozilla/5.0"}, timeout=15)
+        earnings_resp.raise_for_status()
+        for item in earnings_resp.json():
+            try:
+                p=item.split(":")
+                if len(p)>=3:
+                    reward_map[int(p[1])] = float(p[2])
+            except Exception:
+                pass
+
+        jackpot_url = f"https://luckpool.net/verus/miner/history/{luckpool_address}"
+        jackpot_response = requests.get(jackpot_url, headers={"User-Agent":"Mozilla/5.0"}, timeout=15)
+        jackpot_response.raise_for_status()
+        records = jackpot_response.json() if isinstance(jackpot_response.json(), list) else []
+
+        now_bkk = datetime.now(ZoneInfo("Asia/Bangkok"))
+        today_start = now_bkk.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        for item in records:
+            try:
+                if not isinstance(item, str):
+                    continue
+
+                parts = item.split(":")
+                if len(parts) != 3:
+                    continue
+
+                ts = int(parts[0]) / 1000
+                block_value = int(parts[1])
+                dt_bkk = datetime.fromtimestamp(ts, tz=ZoneInfo("Asia/Bangkok"))
+
+                if dt_bkk < today_start:
+                    continue
+
+                amount = reward_map.get(block_value)
+                if amount is None:
+                    amount = float(parts[2])
+
+                jackpot_records.append({
+                    "block": block_value,
+                    "timestamp": dt_bkk,
+                    "amount": amount
+                })
+            except Exception:
+                continue
+    except Exception as e:
+        st.error(f"LuckPool Jackpot API Error: {type(e).__name__}: {e}")
+
+    with st.expander("🔍 Jackpot Debug"):
+        st.write("History:", len(records))
+        st.write("Reward map:", len(reward_map))
+        st.write("Jackpot:", len(jackpot_records))
+
+    st.subheader("🎰 LuckPool Jackpot")
+
+    if jackpot_records:
+        jackpot_df = pd.DataFrame(jackpot_records).sort_values("timestamp", ascending=False)
+        st.metric("จำนวน Jackpot", len(jackpot_df))
+        st.dataframe(jackpot_df.rename(columns={"block":"Block","timestamp":"เวลา","amount":"Jackpot (VRSC)"}), use_container_width=True, hide_index=True)
+    else:
+        st.info("ยังไม่พบ Jackpot ในช่วงเวลาที่เลือก")
+
+    st.markdown("---")
     st.subheader("📈 Hashrate Analytics")
 
     import sqlite3
@@ -1672,12 +1738,12 @@ elif menu == "⛏️ Verus (Mining Farm)":
         # คำนวณจาก LuckPool earnings/address (V15)
         earnings_url = "https://luckpool.net/verus/earnings/REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
         mined_today = 0.0
-
+        
         try:
             er = requests.get(earnings_url, timeout=10)
             er.raise_for_status()
             earnings = er.json()
-            now = pd.Timestamp.now()
+            now = pd.Timestamp.now(tz="Asia/Bangkok")
 
             days_map = {
                 "วันนี้": 1,
@@ -1692,13 +1758,14 @@ elif menu == "⛏️ Verus (Mining Farm)":
             days = days_map.get(period)
 
             for item in earnings:
-                parts = item.split(":")
+                parts = item.replace("\\:",":").split(":")
                 if len(parts) != 3:
                     continue
 
-                ts = pd.to_datetime(int(parts[0]), unit="ms")
+                ts = pd.to_datetime(int(parts[0]), unit="ms", utc=True).tz_convert("Asia/Bangkok")
+                block = int(parts[1])
                 amount = float(parts[2])
-
+                reward_map[block]=amount
                 if days is None or ts >= now - pd.Timedelta(days=days):
                     mined_today += amount
 
@@ -1708,143 +1775,16 @@ elif menu == "⛏️ Verus (Mining Farm)":
         conn.close()
         st.metric("⛏️ ขุดได้ในช่วงที่เลือก", f"{mined_today:.8f} VRSC")
 
-        # ===== LUCKPOOL JACKPOT =====
-        # LuckPool Earnings API returns:
-        # timestamp:block:amount
+        # ===== LUCKPOOL JACKPOT (ตรงจากรายการ Blocks ที่ LuckPool ผูกกับ Miner) =====
+        # LuckPool ระบุ Miner API ว่า blocks/address = Blocks found by miner
+        # และหน้า Miner แสดงรายการเหล่านี้ในหัวข้อ "Miner Jackpots".
+        # ดังนั้นจำนวนรายการ Block ที่ Miner พบ = จำนวน Jackpot
+        # และ Jackpot ต่อครั้งของ Verus ปัจจุบัน = 0.1 VRSC
         #
-        # IMPORTANT:
-        # The jackpot amount is present directly in the Earnings API.
-        # We do NOT need to parse the Blocks API or touch parts[6] ("ap").
-        jackpot_url = "https://luckpool.net/verus/earnings/REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
-
-        try:
-            jackpot_response = requests.get(jackpot_url, timeout=10)
-            jackpot_response.raise_for_status()
-            jackpot_data = jackpot_response.json()
-
-            earnings_rows = []
-
-            for item in jackpot_data:
-                if not isinstance(item, str):
-                    continue
-
-                parts = item.split(":")
-                if len(parts) < 3:
-                    continue
-
-                timestamp_text = parts[0].strip()
-                block = parts[1].strip()
-                amount_text = parts[2].strip()
-
-                timestamp_num = pd.to_numeric(timestamp_text, errors="coerce")
-                amount_num = pd.to_numeric(amount_text, errors="coerce")
-
-                if (
-                    pd.isna(timestamp_num)
-                    or pd.isna(amount_num)
-                    or not block
-                    or float(amount_num) <= 0
-                ):
-                    continue
-
-                earnings_rows.append({
-                    "block": block,
-                    "amount": float(amount_num),
-                    "timestamp": float(timestamp_num)
-                })
-
-            jackpot_records = []
-
-            if earnings_rows:
-                amounts = [row["amount"] for row in earnings_rows]
-                median_amount = float(pd.Series(amounts).median())
-
-                # Normal earnings are around ~0.01 VRSC per round.
-                # LuckPool jackpot rounds appear as a very large outlier.
-                # Use both a dynamic multiplier and a conservative floor so
-                # ordinary high-earning rounds are not shown as jackpots.
-                jackpot_threshold = max(0.05, median_amount * 5.0)
-
-                for row in earnings_rows:
-                    if row["amount"] >= jackpot_threshold:
-                        jackpot_records.append(row)
-
-            # Newest block first.
-            jackpot_records.sort(
-                key=lambda x: int(x["block"]),
-                reverse=True
-            )
-
-            latest_jackpot = jackpot_records[0] if jackpot_records else None
-            max_jackpot = max(jackpot_records, key=lambda x: x["amount"]) if jackpot_records else None
-            total_jackpot = sum(x["amount"] for x in jackpot_records)
-
-            latest_time = "-"
-            latest_block = "-"
-
-            if latest_jackpot:
-                latest_time = datetime.fromtimestamp(
-                    latest_jackpot["timestamp"]
-                ).strftime("%d/%m/%Y %H:%M")
-                latest_block = latest_jackpot["block"]
-
-            today = datetime.now().date()
-            today_records = [
-                x for x in jackpot_records
-                if datetime.fromtimestamp(x["timestamp"]).date() == today
-            ]
-
-            st.subheader("🏆 Verus Jackpot")
-
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                st.metric("🏆 จำนวนครั้ง", f"{len(jackpot_records)} ครั้ง")
-
-            with col2:
-                st.metric(
-                    "💰 Jackpot ล่าสุด",
-                    f"{latest_jackpot['amount']:.8f} VRSC" if latest_jackpot else "0.00000000 VRSC"
-                )
-
-            with col3:
-                st.metric(
-                    "📈 Jackpot สูงสุด",
-                    f"{max_jackpot['amount']:.8f} VRSC" if max_jackpot else "0.00000000 VRSC"
-                )
-
-            col4, col5, col6 = st.columns(3)
-
-            with col4:
-                st.metric("🔢 Block ล่าสุด", latest_block)
-
-            with col5:
-                st.metric("💰 Jackpot สะสม", f"{total_jackpot:.8f} VRSC")
-
-            with col6:
-                st.metric("⏰ เวลาล่าสุด", latest_time)
-
-            st.markdown("---")
-
-            c7, c8 = st.columns(2)
-
-            with c7:
-                st.metric("🎯 Jackpot วันนี้", f"{len(today_records)} Block")
-
-            with c8:
-                st.metric(
-                    "💰 VRSC วันนี้",
-                    f"{sum(x['amount'] for x in today_records):.6f} VRSC"
-                )
-
-            if not today_records:
-                st.info("วันนี้ยังไม่มี Jackpot จาก LuckPool")
-                
-        except Exception as e:
-            st.error(f"Jackpot API Error: {e}")
-
-        
-
+        # จุดสำคัญ:
+        # - ไม่ใช้ Earnings มาตีความว่าเป็น Jackpot
+        # - ไม่ใช้ยอด Block Reward ~3 VRSC เป็น Jackpot
+        # - ใช้ timestamp จากข้อมูล Block ของ LuckPool เพื่อรองรับตัวเลือกช่วงเวลา
         if not df_hash.empty:
 
             df_hash["timestamp"] = pd.to_datetime(
@@ -1854,7 +1794,7 @@ elif menu == "⛏️ Verus (Mining Farm)":
             now = datetime.now()
 
             if period == "วันนี้":
-                start_date = now - timedelta(days=1)
+                start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
             elif period == "3 วัน":
                 start_date = now - timedelta(days=3)
