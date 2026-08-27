@@ -1584,24 +1584,39 @@ elif menu == "⛏️ Verus (Mining Farm)":
         wallet = "REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
 
         try:
+            # ---------- Earnings ----------
             er = requests.get(
                 f"https://luckpool.net/verus/earnings/{wallet}",
                 timeout=15,
                 headers={"User-Agent":"Mozilla/5.0"}
             )
             er.raise_for_status()
-            earnings = er.json()
-
-            jackpot_records = []
-            for item in earnings:
+            earnings_map={}
+            for row in er.json():
                 try:
-                    parts = item.split(":")
-                    if len(parts) != 3:
-                        continue
+                    ts, block, amount = row.split(":")
+                    earnings_map[int(block)]={"timestamp":int(ts)//1000,"amount":float(amount)}
+                except Exception:
+                    pass
+
+            # ---------- Jackpot Blocks ----------
+            br = requests.get(
+                f"https://luckpool.net/verus/blocks/{wallet}",
+                timeout=15,
+                headers={"User-Agent":"Mozilla/5.0"}
+            )
+            br.raise_for_status()
+
+            jackpot_records=[]
+            for row in br.json():
+                try:
+                    parts=row.split(":")
+                    block=int(parts[2].replace("\:",""))
+                    ts=int(parts[4].replace("\:",""))//1000
                     jackpot_records.append({
-                        "timestamp": int(parts[0]) // 1000,
-                        "block": int(parts[1]),
-                        "amount": float(parts[2])
+                        "block":block,
+                        "timestamp":ts,
+                        "amount":earnings_map.get(block,{}).get("amount",0.0)
                     })
                 except Exception:
                     pass
@@ -1623,19 +1638,16 @@ elif menu == "⛏️ Verus (Mining Farm)":
                     if start <= datetime.fromtimestamp(x["timestamp"]) < end
                 ]
 
-            # Jackpot = โบนัสต่อ Block (เฉพาะรางวัลก้อนใหญ่ ~0.1 VRSC)
-            jackpot_only = [x for x in filtered if 0.09 <= x["amount"] <= 0.12]
+            latest = filtered[0] if filtered else None
+            total_amount = sum(x["amount"] for x in filtered)
+            highest = max([x["amount"] for x in filtered], default=0)
 
-            latest = jackpot_only[0] if jackpot_only else None
-            total_amount = sum(x["amount"] for x in jackpot_only)
-            highest = max([x["amount"] for x in jackpot_only], default=0)
-
-            today_records = [x for x in jackpot_only if datetime.fromtimestamp(x["timestamp"]).date()==now_th.date()]
+            today_records = [x for x in filtered if datetime.fromtimestamp(x["timestamp"]).date()==now_th.date()]
 
             st.subheader("🏆 Verus Jackpot")
 
             c1,c2,c3 = st.columns(3)
-            c1.metric("🏆 จำนวนครั้ง", f"{len(jackpot_only)} ครั้ง")
+            c1.metric("🏆 จำนวนครั้ง", f"{len(filtered)} ครั้ง")
             c2.metric("💰 Jackpot ล่าสุด", f"{latest['amount']:.8f} VRSC" if latest else "0.00000000 VRSC")
             c3.metric("📈 Jackpot สูงสุด", f"{highest:.8f} VRSC")
 
