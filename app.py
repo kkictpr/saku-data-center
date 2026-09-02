@@ -4,7 +4,7 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import sqlite3
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta, timezone, timedelta, timezone
 import requests
 import time
 import threading
@@ -1425,7 +1425,7 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
     import sqlite3
     import pandas as pd
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta, timezone, timedelta, timezone, timedelta, timezone
 
     try:
 
@@ -1603,11 +1603,22 @@ elif menu == "⛏️ Verus (Mining Farm)":
             for x in records:
                 try:
                     if isinstance(x, str):
-                        p=x.split(":")
+                        p = x.split(":")
+                        block = int(p[2])
+                        ts = int(p[4]) / 1000
+
+                        amount = 0.0
+                        for t in reversed(p):
+                            if re.fullmatch(r"-?\d+", t):
+                                v = int(t)
+                                if 0 < v < 100000000:
+                                    amount = v / 100000000
+                                    break
+
                         jackpot_records.append({
-                            "block": int(p[2]),
-                            "amount": float(p[6])/100000000,
-                            "timestamp": int(p[4])/1000
+                            "block": block,
+                            "amount": amount,
+                            "timestamp": ts
                         })
                     elif isinstance(x, dict):
                         jackpot_records.append({
@@ -2193,7 +2204,7 @@ elif menu == "🍦 ร้านไอศกรีม (Ice Cream)":
         conn.close()
 
     elif sub_menu == "🧾 ใบเสร็จรับเงิน (Receipts)":
-        st.title("🧾 ใบเสร็จรับเงิน (Receipts / History)")
+        st.title("🧾 ใบเสร็จรับเงิน (Receipts / History)")ๆๆๆ
         try:
             conn = sqlite3.connect('datacenter.db', timeout=15)
             df_orders = pd.read_sql_query("""
