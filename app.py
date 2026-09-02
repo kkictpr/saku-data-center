@@ -2204,7 +2204,7 @@ elif menu == "🍦 ร้านไอศกรีม (Ice Cream)":
         conn.close()
 
     elif sub_menu == "🧾 ใบเสร็จรับเงิน (Receipts)":
-        st.title("🧾 ใบเสร็จรับเงิน (Receipts / History)")ๆๆๆ
+        st.title("🧾 ใบเสร็จรับเงิน (Receipts / History)")
         try:
             conn = sqlite3.connect('datacenter.db', timeout=15)
             df_orders = pd.read_sql_query("""
