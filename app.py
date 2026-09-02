@@ -4,7 +4,7 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import sqlite3
 import pandas as pd
-from datetime import datetime, timedelta, timezone, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 import requests
 import time
 import threading
@@ -125,6 +125,21 @@ def init_db():
         c.execute('''CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT
+        )''')
+
+        # Tables used by the Verus Analytics page must exist before the page
+        # attempts to read them on a brand-new installation.
+        c.execute('''CREATE TABLE IF NOT EXISTS hashrate_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            hashrate REAL
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS vrsc_daily (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            paid REAL,
+            balance REAL,
+            immature REAL
         )''')
         
         conn.commit()
@@ -1302,14 +1317,6 @@ elif menu == "⛏️ Verus (Mining Farm)":
         unsafe_allow_html=True
     )
     st.info("📊 ดึงข้อมูลสถิติเรียลไทม์จาก LuckPool API และราคาเหรียญสดจาก CoinGecko มาคำนวณมูลค่าให้อัตโนมัติ")
-    conn = sqlite3.connect("datacenter.db")
-
-    df_test = pd.read_sql_query(
-    "SELECT COUNT(*) as total FROM vrsc_daily",conn)
-    
-    conn.close()
-
-
     verus_address = "REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
     api_url = f"https://luckpool.net/verus/miner/{verus_address}"
 
@@ -1425,7 +1432,7 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
     import sqlite3
     import pandas as pd
-    from datetime import datetime, timedelta, timezone, timedelta, timezone, timedelta, timezone
+    from datetime import datetime, timedelta, timezone
 
     try:
 
@@ -1487,50 +1494,41 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
         except:
             pass
-        conn = sqlite3.connect("datacenter.db")
-
-        df_test = pd.read_sql_query(
-            "SELECT COUNT(*) as total FROM vrsc_daily",
-            conn
-        )
-
-        conn = sqlite3.connect("datacenter.db")
-
-        df_test = pd.read_sql_query(
-        "SELECT COUNT(*) as total FROM vrsc_daily",
-            conn
-        )
-
-        df_vrsc = pd.read_sql_query("""
-        SELECT *
-        FROM vrsc_daily
-        ORDER BY timestamp DESC
-        LIMIT 5
-        """, conn)
-        
-        df_vrsc = pd.read_sql_query(
-            """
-        SELECT timestamp, paid, balance, immature            
-            FROM vrsc_daily
-            ORDER BY timestamp
-            """,
-            conn
-        )
-
         period = st.selectbox(
             "เลือกช่วงเวลา",
             ["วันนี้", "3 วัน", "7 วัน", "15 วัน", "1 เดือน", "1 ปี", "ทั้งหมด"]
         )
 
-        df_hash = pd.read_sql_query(
-            """
-            SELECT timestamp, hashrate
-            FROM hashrate_history
-            ORDER BY timestamp
-            """,
-            conn
-            
-        )
+        # Every LuckPool timestamp is UTC.  Use Thai calendar days consistently
+        # for earnings, Jackpot, and the hashrate chart.
+        TH_TZ = timezone(timedelta(hours=7))
+        now_th = datetime.now(TH_TZ)
+        start_today = datetime(now_th.year, now_th.month, now_th.day, tzinfo=TH_TZ)
+        period_days = {"วันนี้": 1, "3 วัน": 3, "7 วัน": 7, "15 วัน": 15, "1 เดือน": 30, "1 ปี": 365}
+        period_start = None if period == "ทั้งหมด" else start_today - timedelta(days=period_days[period] - 1)
+        period_end = start_today + timedelta(days=1)
+
+        # Use LuckPool's Miner API as the primary source.  The local collector
+        # is only a fallback, so the displayed history matches the pool.
+        try:
+            history_response = requests.get(
+                f"https://luckpool.net/verus/miner/history/{verus_address}",
+                headers={"User-Agent": "Mozilla/5.0"}, timeout=15
+            )
+            history_response.raise_for_status()
+            history_rows = []
+            for record in history_response.json():
+                values = record.get("a", []) if isinstance(record, dict) else []
+                if len(values) < 2:
+                    continue
+                sampled_at = datetime.fromtimestamp(float(values[0]), tz=timezone.utc).astimezone(TH_TZ)
+                hashrate_mh = float(values[1]) / 1_000_000
+                history_rows.append({"timestamp": sampled_at, "hashrate": hashrate_mh})
+            df_hash = pd.DataFrame(history_rows)
+        except Exception:
+            df_hash = pd.read_sql_query(
+                "SELECT timestamp, hashrate FROM hashrate_history ORDER BY timestamp", conn
+            )
 
         df_vrsc = pd.read_sql_query(
             """
@@ -1541,44 +1539,39 @@ elif menu == "⛏️ Verus (Mining Farm)":
             conn
         )
         
-        # คำนวณจาก LuckPool earnings/address (V15)
+        # Pool earnings and block rewards are separate LuckPool feeds.  Both
+        # are included in the true mining income shown below.
         earnings_url = "https://luckpool.net/verus/earnings/REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
-        mined_today = 0.0
+        pool_earnings = 0.0
+        earnings_records = 0
+        earnings_by_block = {}
+        earnings_rows = []
+        earnings_error = None
 
         try:
             er = requests.get(earnings_url, timeout=10)
             er.raise_for_status()
             earnings = er.json()
-            now = pd.Timestamp.now()
-
-            days_map = {
-                "วันนี้": 1,
-                "3 วัน": 3,
-                "7 วัน": 7,
-                "10 วัน": 10,
-                "15 วัน": 15,
-                "1 เดือน": 30,
-                "1 ปี": 365,
-            }
-
-            days = days_map.get(period)
 
             for item in earnings:
                 parts = item.split(":")
                 if len(parts) != 3:
                     continue
 
-                ts = pd.to_datetime(int(parts[0]), unit="ms")
+                ts = datetime.fromtimestamp(int(parts[0]) / 1000, tz=timezone.utc).astimezone(TH_TZ)
+                block_height = parts[1]
                 amount = float(parts[2])
+                earnings_rows.append({'block': block_height, 'amount': amount, 'ts': ts})
+                earnings_by_block[block_height] = earnings_by_block.get(block_height, 0.0) + amount
 
-                if days is None or ts >= now - pd.Timedelta(days=days):
-                    mined_today += amount
+                if period_start is None or period_start <= ts < period_end:
+                    pool_earnings += amount
+                    earnings_records += 1
 
-        except Exception:
-            mined_today = 0.0
+        except Exception as error:
+            earnings_error = str(error)
 
         conn.close()
-        st.metric("⛏️ ขุดได้ในช่วงที่เลือก", f"{mined_today:.8f} VRSC")
 
         # ===== LUCKPOOL JACKPOT =====
         wallet = "REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
@@ -1603,53 +1596,47 @@ elif menu == "⛏️ Verus (Mining Farm)":
             for x in records:
                 try:
                     if isinstance(x, str):
-                        p = x.split(":")
-                        block = int(p[2])
-                        ts = int(p[4]) / 1000
-
-                        amount = 0.0
-                        for t in reversed(p):
-                            if re.fullmatch(r"-?\d+", t):
-                                v = int(t)
-                                if 0 < v < 100000000:
-                                    amount = v / 100000000
-                                    break
-
+                        p=x.split(":")
                         jackpot_records.append({
-                            "block": block,
-                            "amount": amount,
-                            "timestamp": ts
+                            "block": int(p[2]),
+                            "full_block_reward": float(p[8]) / 100000000,
+                            "personal_earning": sum(r["amount"] for r in earnings_rows if r["block"] == p[2]),
+                            "timestamp": int(p[4]) / 1000,
                         })
                     elif isinstance(x, dict):
+                        block_height = str(x.get("height") or x.get("block"))
                         jackpot_records.append({
-                            "block": int(x.get("height") or x.get("block")),
-                            "amount": float(x.get("reward") or x.get("amount") or 0),
-                            "timestamp": int(x.get("timestamp") or x.get("time") or 0)
+                            "block": int(block_height),
+                            "full_block_reward": float(x.get("reward") or x.get("amount") or 0),
+                            "personal_earning": sum(r["amount"] for r in earnings_rows if r["block"] == block_height),
+                            "timestamp": int(x.get("timestamp") or x.get("time") or 0),
                         })
                 except Exception:
                     pass
 
             jackpot_records.sort(key=lambda z: z["timestamp"], reverse=True)
 
-            TH_TZ = timezone(timedelta(hours=7))
-            now_th = datetime.now(TH_TZ)
-            start_today = datetime(now_th.year, now_th.month, now_th.day, tzinfo=TH_TZ)
-            period_days = {"วันนี้":0,"3 วัน":3,"7 วัน":7,"15 วัน":15,"1 เดือน":30,"1 ปี":365}
-
-            if period == "ทั้งหมด":
-                filtered = jackpot_records
-            else:
-                days = period_days[period]
-                start = start_today if days == 0 else (start_today - timedelta(days=days-1))
-                end = start_today + timedelta(days=1)
-                filtered = [
-                    x for x in jackpot_records
-                    if start <= datetime.fromtimestamp(x["timestamp"], tz=timezone.utc).astimezone(TH_TZ) < end
-                ]
+            filtered = [
+                item for item in jackpot_records
+                if period_start is None or period_start <= datetime.fromtimestamp(
+                    item["timestamp"], tz=timezone.utc
+                ).astimezone(TH_TZ) < period_end
+            ]
 
             latest = filtered[0] if filtered else None
-            total_amount = sum(x["amount"] for x in filtered)
-            highest = max([x["amount"] for x in filtered], default=0)
+            jackpot_earnings = sum(x["personal_earning"] for x in filtered)
+            highest = max([x["personal_earning"] for x in filtered], default=0)
+
+            # earnings/address already includes the miner's income from each
+            # found block.  Do not add a full block reward here, or income is
+            # overstated by rewards paid to the rest of the pool.
+            st.metric("⛏️ ขุดได้รวมในช่วงที่เลือก", f"{pool_earnings:.8f} VRSC")
+            st.caption(
+                f"รายได้จาก LuckPool {pool_earnings:.8f} VRSC ({earnings_records} รายการ) — "
+                f"รวม Jackpot ของคุณ {jackpot_earnings:.8f} VRSC แล้ว (ไม่บวกซ้ำ)"
+            )
+            if earnings_error:
+                st.warning("ไม่สามารถดึงรายได้ Pool ได้ครบในรอบนี้ จึงแสดงยอด Jackpot ที่ตรวจสอบได้")
 
             today_records = [x for x in filtered if datetime.fromtimestamp(x["timestamp"], tz=timezone.utc).astimezone(TH_TZ).date()==now_th.date()]
 
@@ -1657,77 +1644,65 @@ elif menu == "⛏️ Verus (Mining Farm)":
 
             c1,c2,c3 = st.columns(3)
             c1.metric("🏆 จำนวนครั้ง", f"{len(filtered)} ครั้ง")
-            c2.metric("💰 Jackpot ล่าสุด", f"{latest['amount']:.8f} VRSC" if latest else "0.00000000 VRSC")
-            c3.metric("📈 Jackpot สูงสุด", f"{highest:.8f} VRSC")
+            c2.metric("💰 Jackpot ล่าสุด (รายได้คุณ)", f"{latest['personal_earning']:.8f} VRSC" if latest else "0.00000000 VRSC")
+            c3.metric("📈 Jackpot สูงสุด (รายได้คุณ)", f"{highest:.8f} VRSC")
 
             c4,c5,c6 = st.columns(3)
             c4.metric("🔢 Block ล่าสุด", latest["block"] if latest else "-")
-            c5.metric("💰 Jackpot สะสม", f"{total_amount:.8f} VRSC")
-            c6.metric("⏰ เวลาล่าสุด", datetime.fromtimestamp(latest["timestamp"], tz=timezone.utc).astimezone(TH_TZ).strftime("%d/%m/%Y %H:%M") if latest else "-")
+            c5.metric("💰 Jackpot สะสม (รายได้คุณ)", f"{jackpot_earnings:.8f} VRSC")
+            c6.metric("⏰ เวลาไทย (UTC+7)", datetime.fromtimestamp(latest["timestamp"], tz=timezone.utc).astimezone(TH_TZ).strftime("%d/%m/%Y %H:%M") if latest else "-")
+            if latest:
+                latest_utc = datetime.fromtimestamp(latest["timestamp"], tz=timezone.utc)
+                st.caption(
+                    f"เวลา LuckPool (UTC): {latest_utc.strftime('%d/%m/%Y %H:%M')} | "
+                    f"รางวัลเต็มของ Block: {latest['full_block_reward']:.8f} VRSC | "
+                    f"รายได้ของคุณ: {latest['personal_earning']:.8f} VRSC"
+                )
 
             st.markdown("---")
 
             c7,c8 = st.columns(2)
             c7.metric("🎯 Jackpot วันนี้", f"{len(today_records)} Block")
-            c8.metric("💰 VRSC วันนี้", f"{sum(x['amount'] for x in today_records):.6f} VRSC")
+            c8.metric("💰 รายได้ Jackpot วันนี้", f"{sum(x['personal_earning'] for x in today_records):.6f} VRSC")
 
         except Exception as e:
+            st.metric("⛏️ รายได้ Pool ในช่วงที่เลือก", f"{pool_earnings:.8f} VRSC")
+            st.caption("ยังไม่รวม Jackpot เพราะเชื่อมต่อข้อมูล Block ไม่สำเร็จ")
             st.error(f"Jackpot API Error: {e}")
 
         if not df_hash.empty:
 
-            df_hash["timestamp"] = pd.to_datetime(
-                df_hash["timestamp"]
-            )
+            df_hash["timestamp"] = pd.to_datetime(df_hash["timestamp"], utc=True).dt.tz_convert(TH_TZ)
 
-            now = datetime.now()
-
-            if period == "วันนี้":
-                start_date = now - timedelta(days=1)
-
-            elif period == "3 วัน":
-                start_date = now - timedelta(days=3)
-
-            elif period == "7 วัน":
-                start_date = now - timedelta(days=7)
-
-            elif period == "15 วัน":
-                start_date = now - timedelta(days=15)
-
-            elif period == "1 เดือน":
-                start_date = now - timedelta(days=30)
-
-            elif period == "1 ปี":
-                start_date = now - timedelta(days=365)
-
-            else:
-                start_date = None
-
-            if start_date is not None:
+            if period_start is not None:
                 df_hash = df_hash[
-                df_hash["timestamp"] >= start_date
-            ]
+                    (df_hash["timestamp"] >= period_start) &
+                    (df_hash["timestamp"] < period_end)
+                ]
 
-            c1, c2, c3 = st.columns(3)
+            if df_hash.empty:
+                st.info("ไม่มีข้อมูล Hashrate จาก LuckPool ในช่วงที่เลือก")
+            else:
+                c1, c2, c3 = st.columns(3)
 
-            c1.metric(
-                "📊 ค่าเฉลี่ย",
-                f"{df_hash['hashrate'].mean():.2f} MH"
-            )
+                c1.metric(
+                    "📊 ค่าเฉลี่ย",
+                    f"{df_hash['hashrate'].mean():.2f} MH"
+                )
 
-            c2.metric(
-                "⬆️ ค่าสูงสุด",
-                f"{df_hash['hashrate'].max():.2f} MH"
-            )
+                c2.metric(
+                    "⬆️ ค่าสูงสุด",
+                    f"{df_hash['hashrate'].max():.2f} MH"
+                )
 
-            c3.metric(
-                "⬇️ ค่าต่ำสุด",
-                f"{df_hash['hashrate'].min():.2f} MH"
-            )
+                c3.metric(
+                    "⬇️ ค่าต่ำสุด",
+                    f"{df_hash['hashrate'].min():.2f} MH"
+                )
 
-            st.line_chart(
-                df_hash.set_index("timestamp")["hashrate"]
-            )
+                st.line_chart(
+                    df_hash.set_index("timestamp")["hashrate"]
+                )
 
             st.markdown("---")
             
