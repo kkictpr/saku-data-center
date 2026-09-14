@@ -22,17 +22,8 @@ house_b64 = img_to_b64(os.path.join(ASSETS, "house.png"))
 
 load_dotenv()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SECRET_KEY")
-
-# รองรับทั้ง Local (.env) และ Streamlit Cloud (st.secrets)
-if not SUPABASE_URL:
-    SUPABASE_URL = st.secrets.get("SUPABASE_URL", None)
-if not SUPABASE_KEY:
-    SUPABASE_KEY = st.secrets.get("SUPABASE_SECRET_KEY", None)
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SECRET_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL") or st.secrets.get("SUPABASE_URL", None)
+SUPABASE_KEY = os.getenv("SUPABASE_SECRET_KEY") or st.secrets.get("SUPABASE_SECRET_KEY", None)
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ===== Jackpot Local Database =====
@@ -96,7 +87,10 @@ def save_local_jackpot(block, amount, timestamp):
     conn.close()
 
 
-def try:\n                sync_jackpot_to_supabase()\n            except Exception as e:\n                print(f"Jackpot Sync: {e}"):
+def sync_jackpot_to_supabase():
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("Jackpot Sync: Supabase credentials not found")
+        return
     conn = sqlite3.connect(JACKPOT_DB)
     c = conn.cursor()
     synced_count = 0
