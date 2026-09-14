@@ -88,9 +88,6 @@ def save_local_jackpot(block, amount, timestamp):
 
 
 def sync_jackpot_to_supabase():
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        print("Jackpot Sync: Missing Supabase credentials")
-        return
     conn = sqlite3.connect(JACKPOT_DB)
     c = conn.cursor()
     synced_count = 0
@@ -129,7 +126,7 @@ def sync_jackpot_to_supabase():
     conn.commit()
     conn.close()
 
-def get_cloud_jackpot_count():
+    def get_cloud_jackpot_count():
         try:
             result = (
                 supabase.table("jackpot_history")
@@ -140,7 +137,7 @@ def get_cloud_jackpot_count():
         except Exception:
             return None
 
-    st.set_page_config(page_title="Saku Data Center", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Saku Data Center", layout="wide", initial_sidebar_state="expanded")
 
 
 st_autorefresh(interval=60_000, key="solar_refresh")
