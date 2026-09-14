@@ -9,6 +9,7 @@ import requests
 import time
 import threading
 import base64
+from pathlib import Path
 from supabase import create_client
 ASSETS = os.path.join(os.path.dirname(__file__), "assets")
 
@@ -25,8 +26,118 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SECRET_KEY")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+# ===== Jackpot Local Database =====
 
-st.set_page_config(page_title="Saku Data Center", layout="wide", initial_sidebar_state="expanded")
+JACKPOT_DB = "data/jackpot_events.db"
+Path("data").mkdir(exist_ok=True)
+
+def init_jackpot_db():
+    conn = sqlite3.connect(JACKPOT_DB)
+    c = conn.cursor()
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS jackpot_events(
+            block INTEGER PRIMARY KEY,
+            amount REAL NOT NULL,
+            timestamp INTEGER NOT NULL,
+            synced INTEGER DEFAULT 0
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+init_jackpot_db()
+
+# ===== End Jackpot Local Database =====
+def save_local_jackpot(block, amount, timestamp):
+    """Persist a LuckPool block event and refresh its amount when the pool
+    later exposes the final per-wallet earning for that block.
+
+    The old code used INSERT OR IGNORE, so an early estimate could get stuck
+    forever (e.g. ~0.1077 VRSC) even after LuckPool reported the real earning
+    for the same block (e.g. ~0.1119 VRSC).
+    """
+    conn = sqlite3.connect(JACKPOT_DB)
+    c = conn.cursor()
+
+    block = int(block)
+    amount = float(amount)
+    timestamp = int(timestamp)
+
+    row = c.execute(
+        "SELECT amount, timestamp FROM jackpot_events WHERE block = ?",
+        (block,),
+    ).fetchone()
+
+    if row is None:
+        c.execute(
+            "INSERT INTO jackpot_events (block, amount, timestamp, synced) VALUES (?, ?, ?, 0)",
+            (block, amount, timestamp),
+        )
+    elif abs(float(row[0]) - amount) > 1e-12 or int(row[1]) != timestamp:
+        # Refresh the same block with the latest LuckPool value and force a
+        # Supabase upsert on the next sync cycle.
+        c.execute(
+            "UPDATE jackpot_events SET amount = ?, timestamp = ?, synced = 0 WHERE block = ?",
+            (amount, timestamp, block),
+        )
+
+    conn.commit()
+    conn.close()
+
+
+def sync_jackpot_to_supabase():
+    conn = sqlite3.connect(JACKPOT_DB)
+    c = conn.cursor()
+    synced_count = 0
+
+    c.execute("""
+        SELECT block, amount, timestamp
+        FROM jackpot_events
+        WHERE synced = 0
+    """)
+
+    rows = c.fetchall()
+
+    for block, amount, ts in rows:
+        try:
+            supabase.table("jackpot_history").upsert({
+                "block": block,
+                "amount": amount,
+                "timestamp": datetime.fromtimestamp(
+                    ts,
+                    timezone.utc
+                ).isoformat()
+            }, on_conflict="block").execute()
+
+            c.execute(
+                "UPDATE jackpot_events SET synced=1 WHERE block=?",
+                (block,)
+            )
+            synced_count += 1
+
+        except Exception as e:
+            print("Jackpot Sync:", e)
+
+        if synced_count > 0:
+            print(f"✅ Jackpot Sync: {synced_count} รายการ")
+
+    conn.commit()
+    conn.close()
+
+    def get_cloud_jackpot_count():
+        try:
+            result = (
+                supabase.table("jackpot_history")
+                .select("block", count="exact")
+                .execute()
+            )
+            return result.count or 0
+        except Exception:
+            return None
+
+    st.set_page_config(page_title="Saku Data Center", layout="wide", initial_sidebar_state="expanded")
 
 
 st_autorefresh(interval=60_000, key="solar_refresh")
@@ -1545,7 +1656,6 @@ elif menu == "⛏️ Verus (Mining Farm)":
         pool_earnings = 0.0
         earnings_records = 0
         earnings_by_block = {}
-        earnings_rows = []
         earnings_error = None
 
         try:
@@ -1561,12 +1671,12 @@ elif menu == "⛏️ Verus (Mining Farm)":
                 ts = datetime.fromtimestamp(int(parts[0]) / 1000, tz=timezone.utc).astimezone(TH_TZ)
                 block_height = parts[1]
                 amount = float(parts[2])
-                earnings_rows.append({'block': block_height, 'amount': amount, 'ts': ts})
                 earnings_by_block[block_height] = earnings_by_block.get(block_height, 0.0) + amount
 
                 if period_start is None or period_start <= ts < period_end:
                     pool_earnings += amount
                     earnings_records += 1
+                    
 
         except Exception as error:
             earnings_error = str(error)
@@ -1574,13 +1684,19 @@ elif menu == "⛏️ Verus (Mining Farm)":
         conn.close()
 
         # ===== LUCKPOOL JACKPOT =====
+        #
+        # Jackpot is treated as a real block event found by this wallet.
+        # LuckPool's /blocks endpoint tells us which blocks this wallet found;
+        # LuckPool's /earnings endpoint tells us the final per-wallet earning
+        # for each block.  We do NOT estimate Jackpot from the full block
+        # reward or divide by a constant.
         wallet = "REn28U7KUABvRQTwWwjKYnkCYyiBC1ga7L"
 
         try:
             r = requests.get(
                 f"https://luckpool.net/verus/blocks/{wallet}",
                 timeout=15,
-                headers={"User-Agent":"Mozilla/5.0"}
+                headers={"User-Agent": "Mozilla/5.0"},
             )
             r.raise_for_status()
             data = r.json()
@@ -1593,43 +1709,103 @@ elif menu == "⛏️ Verus (Mining Farm)":
                 records = []
 
             jackpot_records = []
+
             for x in records:
                 try:
+                    block = None
+                    ts = 0
+                    pool_reward = 0.0
+
                     if isinstance(x, str):
-                        p=x.split(":")
-                        jackpot_records.append({
-                            "block": int(p[2]),
-                            "full_block_reward": float(p[8]) / 100000000,
-                            "personal_earning": sum(r["amount"] for r in earnings_rows if r["block"] == p[2]),
-                            "timestamp": int(p[4]) / 1000,
-                        })
+                        p = x.split(":")
+                        if len(p) < 9:
+                            continue
+
+                        block = int(p[2])
+                        ts = int(p[4]) / 1000
+                        # p[8] is the full pool/block reward, for display only.
+                        try:
+                            pool_reward = int(p[8]) / 100000000
+                        except Exception:
+                            pool_reward = 0.0
+
                     elif isinstance(x, dict):
-                        block_height = str(x.get("height") or x.get("block"))
-                        jackpot_records.append({
-                            "block": int(block_height),
-                            "full_block_reward": float(x.get("reward") or x.get("amount") or 0),
-                            "personal_earning": sum(r["amount"] for r in earnings_rows if r["block"] == block_height),
-                            "timestamp": int(x.get("timestamp") or x.get("time") or 0),
-                        })
-                except Exception:
-                    pass
+                        block = int(x.get("height") or x.get("block"))
+                        raw_ts = x.get("timestamp") or x.get("time") or 0
+                        ts = float(raw_ts)
+                        # API payloads may expose seconds or milliseconds.
+                        if ts > 10_000_000_000:
+                            ts /= 1000.0
+                        pool_reward = float(x.get("reward") or x.get("amount") or 0.0)
+                    else:
+                        continue
+
+                    if block is None:
+                        continue
+
+                    # IMPORTANT: use LuckPool earnings for the wallet as the
+                    # Jackpot value. Never estimate it from pool_reward.
+                    personal = float(
+                        earnings_by_block.get(str(block),
+                        earnings_by_block.get(block, 0.0))
+                    )
+
+                    # A found block is the event. Save once its wallet earning
+                    # is visible; later refreshes can update the same block.
+                    if personal > 0:
+                        save_local_jackpot(block, personal, ts)
+
+                    jackpot_records.append({
+                        "block": block,
+                        "amount": personal,
+                        "pool_reward": pool_reward,
+                        "timestamp": ts,
+                        "personal_earning": personal,
+                    })
+
+                    print(
+                        f"DEBUG jackpot block={block} personal={personal:.8f} "
+                        f"pool_reward={pool_reward:.8f}"
+                    )
+                except Exception as item_error:
+                    print("Jackpot record parse:", item_error)
 
             jackpot_records.sort(key=lambda z: z["timestamp"], reverse=True)
+            sync_jackpot_to_supabase()
 
-            filtered = [
-                item for item in jackpot_records
-                if period_start is None or period_start <= datetime.fromtimestamp(
-                    item["timestamp"], tz=timezone.utc
-                ).astimezone(TH_TZ) < period_end
-            ]
+            conn_j = sqlite3.connect(JACKPOT_DB)
+            rows = conn_j.execute(
+                "SELECT block, amount, timestamp FROM jackpot_events"
+            ).fetchall()
+            conn_j.close()
+
+            filtered = []
+            for b, a, ts in rows:
+                dt = datetime.fromtimestamp(ts, tz=TH_TZ)
+                if period_start is None or period_start <= dt < period_end:
+                    filtered.append({
+                        "block": b,
+                        "personal_earning": float(a),
+                        "amount": float(a),
+                        "full_block_reward": float(
+                            next((
+                                r.get("pool_reward", 0.0)
+                                for r in jackpot_records
+                                if int(r.get("block")) == int(b)
+                            ), 0.0)
+                        ),
+                        "timestamp": ts,
+                    })
+
+            filtered.sort(key=lambda x: x["timestamp"], reverse=True)
 
             latest = filtered[0] if filtered else None
             jackpot_earnings = sum(x["personal_earning"] for x in filtered)
-            highest = max([x["personal_earning"] for x in filtered], default=0)
+            highest = max(
+                [x["personal_earning"] for x in filtered],
+                default=0.0,
+            )
 
-            # earnings/address already includes the miner's income from each
-            # found block.  Do not add a full block reward here, or income is
-            # overstated by rewards paid to the rest of the pool.
             st.metric("⛏️ ขุดได้รวมในช่วงที่เลือก", f"{pool_earnings:.8f} VRSC")
             st.caption(
                 f"รายได้จาก LuckPool {pool_earnings:.8f} VRSC ({earnings_records} รายการ) — "
@@ -1638,36 +1814,77 @@ elif menu == "⛏️ Verus (Mining Farm)":
             if earnings_error:
                 st.warning("ไม่สามารถดึงรายได้ Pool ได้ครบในรอบนี้ จึงแสดงยอด Jackpot ที่ตรวจสอบได้")
 
-            today_records = [x for x in filtered if datetime.fromtimestamp(x["timestamp"], tz=timezone.utc).astimezone(TH_TZ).date()==now_th.date()]
+            today_records = [
+                x for x in filtered
+                if datetime.fromtimestamp(x["timestamp"], tz=timezone.utc)
+                .astimezone(TH_TZ).date() == now_th.date()
+            ]
 
             st.subheader("🏆 Verus Jackpot")
 
-            c1,c2,c3 = st.columns(3)
+            local_count = len(rows)
+            try:
+                cloud_count = (
+                    supabase.table("jackpot_history")
+                    .select("block", count="exact")
+                    .execute()
+                    .count or 0
+                )
+            except Exception:
+                cloud_count = 0
+
+            sync_text = (
+                "Synced ✅"
+                if cloud_count is not None and cloud_count == local_count
+                else "Waiting ⏳"
+            )
+            st.info(
+                f"☁️ Sync Status: Local {local_count} | "
+                f"Cloud {cloud_count or 0} | {sync_text}"
+            )
+
+            c1, c2, c3 = st.columns(3)
             c1.metric("🏆 จำนวนครั้ง", f"{len(filtered)} ครั้ง")
-            c2.metric("💰 Jackpot ล่าสุด (รายได้คุณ)", f"{latest['personal_earning']:.8f} VRSC" if latest else "0.00000000 VRSC")
+            c2.metric(
+                "💰 Jackpot ล่าสุด (รายได้คุณ)",
+                f"{latest['personal_earning']:.8f} VRSC"
+                if latest else "0.00000000 VRSC",
+            )
             c3.metric("📈 Jackpot สูงสุด (รายได้คุณ)", f"{highest:.8f} VRSC")
 
-            c4,c5,c6 = st.columns(3)
+            c4, c5, c6 = st.columns(3)
             c4.metric("🔢 Block ล่าสุด", latest["block"] if latest else "-")
             c5.metric("💰 Jackpot สะสม (รายได้คุณ)", f"{jackpot_earnings:.8f} VRSC")
-            c6.metric("⏰ เวลาไทย (UTC+7)", datetime.fromtimestamp(latest["timestamp"], tz=timezone.utc).astimezone(TH_TZ).strftime("%d/%m/%Y %H:%M") if latest else "-")
+            c6.metric(
+                "⏰ เวลาไทย (UTC+7)",
+                datetime.fromtimestamp(latest["timestamp"], tz=timezone.utc)
+                .astimezone(TH_TZ).strftime("%d/%m/%Y %H:%M")
+                if latest else "-",
+            )
+
             if latest:
                 latest_utc = datetime.fromtimestamp(latest["timestamp"], tz=timezone.utc)
                 st.caption(
                     f"เวลา LuckPool (UTC): {latest_utc.strftime('%d/%m/%Y %H:%M')} | "
                     f"รางวัลเต็มของ Block: {latest['full_block_reward']:.8f} VRSC | "
-                    f"รายได้ของคุณ: {latest['personal_earning']:.8f} VRSC"
+                    f"รายได้ของคุณจาก Block: {latest['personal_earning']:.8f} VRSC"
                 )
 
             st.markdown("---")
-
-            c7,c8 = st.columns(2)
+            c7, c8 = st.columns(2)
             c7.metric("🎯 Jackpot วันนี้", f"{len(today_records)} Block")
-            c8.metric("💰 รายได้ Jackpot วันนี้", f"{sum(x['personal_earning'] for x in today_records):.6f} VRSC")
+            c8.metric(
+                "💰 รายได้ Jackpot วันนี้",
+                f"{sum(x['personal_earning'] for x in today_records):.8f} VRSC",
+            )
 
         except Exception as e:
-            st.metric("⛏️ รายได้ Pool ในช่วงที่เลือก", f"{pool_earnings:.8f} VRSC")
-            st.caption("ยังไม่รวม Jackpot เพราะเชื่อมต่อข้อมูล Block ไม่สำเร็จ")
+            st.metric("🔨 รายได้ Pool ในช่วงที่เลือก", f"{pool_earnings:.8f} VRSC")
+            st.caption(
+                f"🔒 Jackpot สะสมในช่วงที่เลือก "
+                f"{sum(x.get('personal_earning', 0) for x in filtered):.8f} VRSC "
+                f"({len(filtered)} ครั้ง)"
+            )
             st.error(f"Jackpot API Error: {e}")
 
         if not df_hash.empty:
