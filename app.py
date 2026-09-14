@@ -25,12 +25,16 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SECRET_KEY")
 
-supabase = None
-if SUPABASE_URL and SUPABASE_KEY:
-    try:
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    except Exception as e:
-        print("Supabase init:", e)
+# รองรับทั้ง Local (.env) และ Streamlit Cloud (st.secrets)
+if not SUPABASE_URL:
+    SUPABASE_URL = st.secrets.get("SUPABASE_URL", None)
+if not SUPABASE_KEY:
+    SUPABASE_KEY = st.secrets.get("SUPABASE_SECRET_KEY", None)
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SECRET_KEY")
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ===== Jackpot Local Database =====
 
 JACKPOT_DB = "data/jackpot_events.db"
@@ -92,9 +96,7 @@ def save_local_jackpot(block, amount, timestamp):
     conn.close()
 
 
-def sync_jackpot_to_supabase():
-    if supabase is None:
-        return
+def try:\n                sync_jackpot_to_supabase()\n            except Exception as e:\n                print(f"Jackpot Sync: {e}"):
     conn = sqlite3.connect(JACKPOT_DB)
     c = conn.cursor()
     synced_count = 0
@@ -146,11 +148,6 @@ def sync_jackpot_to_supabase():
 
     st.set_page_config(page_title="Saku Data Center", layout="wide", initial_sidebar_state="expanded")
 
-
-try:
-    sync_jackpot_to_supabase()
-except Exception as e:
-    print(f'Auto Sync: {e}')
 
 st_autorefresh(interval=60_000, key="solar_refresh")
 def init_db():
