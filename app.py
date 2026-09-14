@@ -25,7 +25,7 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL") or st.secrets.get("SUPABASE_URL", None)
 SUPABASE_KEY = os.getenv("SUPABASE_SECRET_KEY") or st.secrets.get("SUPABASE_SECRET_KEY", None)
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 # ===== Jackpot Local Database =====
 
 JACKPOT_DB = "data/jackpot_events.db"
@@ -88,8 +88,7 @@ def save_local_jackpot(block, amount, timestamp):
 
 
 def sync_jackpot_to_supabase():
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        print("Jackpot Sync: Supabase credentials not found")
+    if supabase is None:
         return
     conn = sqlite3.connect(JACKPOT_DB)
     c = conn.cursor()
